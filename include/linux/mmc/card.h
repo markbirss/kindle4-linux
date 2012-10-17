@@ -42,6 +42,12 @@ struct mmc_csd {
 struct mmc_ext_csd {
 	unsigned int		hs_max_dtr;
 	unsigned int		sectors;
+	unsigned int		card_type;
+#define MMC_DDR_MODE_MASK 	(0x3<<2)
+	unsigned char		boot_info;
+	unsigned char		boot_size_mult;
+	unsigned char		boot_config;
+	unsigned char		boot_bus_width;
 };
 
 struct sd_scr {
@@ -89,11 +95,13 @@ struct mmc_card {
 #define MMC_TYPE_MMC		0		/* MMC card */
 #define MMC_TYPE_SD		1		/* SD card */
 #define MMC_TYPE_SDIO		2		/* SDIO card */
+#define MMC_TYPE_SD_COMBO	3		/* SD combo (IO+mem) card */
 	unsigned int		state;		/* (our) card state */
 #define MMC_STATE_PRESENT	(1<<0)		/* present in sysfs */
 #define MMC_STATE_READONLY	(1<<1)		/* card is read-only */
 #define MMC_STATE_HIGHSPEED	(1<<2)		/* card is in high speed mode */
 #define MMC_STATE_BLOCKADDR	(1<<3)		/* card uses block-addressing */
+#define MMC_STATE_DDR_MODE	(1<<4)		/* Uses dual data rate */
 
 	u32			raw_cid[4];	/* raw card CID */
 	u32			raw_csd[4];	/* raw card CSD */
@@ -123,11 +131,13 @@ struct mmc_card {
 #define mmc_card_readonly(c)	((c)->state & MMC_STATE_READONLY)
 #define mmc_card_highspeed(c)	((c)->state & MMC_STATE_HIGHSPEED)
 #define mmc_card_blockaddr(c)	((c)->state & MMC_STATE_BLOCKADDR)
+#define mmc_card_ddr_mode(c)	((c)->state & MMC_STATE_DDR_MODE)
 
 #define mmc_card_set_present(c)	((c)->state |= MMC_STATE_PRESENT)
 #define mmc_card_set_readonly(c) ((c)->state |= MMC_STATE_READONLY)
 #define mmc_card_set_highspeed(c) ((c)->state |= MMC_STATE_HIGHSPEED)
 #define mmc_card_set_blockaddr(c) ((c)->state |= MMC_STATE_BLOCKADDR)
+#define mmc_card_set_ddr_mode(c)  ((c)->state |= MMC_STATE_DDR_MODE)
 
 #define mmc_card_name(c)	((c)->cid.prod_name)
 #define mmc_card_id(c)		(dev_name(&(c)->dev))

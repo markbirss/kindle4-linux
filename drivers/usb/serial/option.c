@@ -71,6 +71,10 @@ static int  option_suspend(struct usb_serial *serial, pm_message_t message);
 static int  option_resume(struct usb_serial *serial);
 #endif
 
+/* prevent bus from entering idle mode 
+ * or wake it up if it was in idle mode */
+extern void ehci_hcd_recalc_work(void);
+
 /* Vendor and product IDs */
 #define OPTION_VENDOR_ID			0x0AF0
 #define OPTION_PRODUCT_COLT			0x5000
@@ -325,6 +329,9 @@ static int  option_resume(struct usb_serial *serial);
 #define ALCATEL_VENDOR_ID			0x1bbb
 #define ALCATEL_PRODUCT_X060S			0x0000
 
+/* Amazon Products */
+#define LAB126_VENDOR_ID			0x1949
+#define LAB126_PRODUCT_ELMO			0x9001
 
 static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(OPTION_VENDOR_ID, OPTION_PRODUCT_COLT) },
@@ -582,6 +589,12 @@ static struct usb_device_id option_ids[] = {
 	{ USB_DEVICE(ALINK_VENDOR_ID, 0x9000) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(ALINK_VENDOR_ID, ALINK_PRODUCT_3GU, 0xff, 0xff, 0xff) },
 	{ USB_DEVICE(ALCATEL_VENDOR_ID, ALCATEL_PRODUCT_X060S) },
+	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x9001) },
+	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x9002) },
+	{ USB_DEVICE(QUALCOMM_VENDOR_ID, 0x9004) },
+	{ USB_DEVICE(LAB126_VENDOR_ID, LAB126_PRODUCT_ELMO) },
+	{ USB_DEVICE(LAB126_VENDOR_ID, 0x9002) },
+	{ USB_DEVICE(LAB126_VENDOR_ID, 0x9004) },
 	{ } /* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, option_ids);
@@ -761,6 +774,7 @@ static int option_write(struct tty_struct *tty, struct usb_serial_port *port,
 	struct urb *this_urb = NULL; /* spurious */
 	int err;
 
+	ehci_hcd_recalc_work();
 	portdata = usb_get_serial_port_data(port);
 
 	dbg("%s: write (%d chars)", __func__, count);
@@ -786,6 +800,7 @@ static int option_write(struct tty_struct *tty, struct usb_serial_port *port,
 		/* send the data */
 		memcpy(this_urb->transfer_buffer, buf, todo);
 		this_urb->transfer_buffer_length = todo;
+		this_urb->transfer_flags |= URB_ZERO_PACKET;
 
 		err = usb_submit_urb(this_urb, GFP_ATOMIC);
 		if (err) {
@@ -813,6 +828,7 @@ static void option_indat_callback(struct urb *urb)
 	unsigned char *data = urb->transfer_buffer;
 	int status = urb->status;
 
+	ehci_hcd_recalc_work();
 	dbg("%s: %p", __func__, urb);
 
 	endpoint = usb_pipeendpoint(urb->pipe);
@@ -848,6 +864,7 @@ static void option_outdat_callback(struct urb *urb)
 	struct option_port_private *portdata;
 	int i;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __func__);
 
 	port =  urb->context;
@@ -871,6 +888,7 @@ static void option_instat_callback(struct urb *urb)
 	struct usb_serial_port *port =  urb->context;
 	struct option_port_private *portdata = usb_get_serial_port_data(port);
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __func__);
 	dbg("%s: urb %p port %p has data %p", __func__, urb, port, portdata);
 
@@ -908,11 +926,11 @@ static void option_instat_callback(struct urb *urb)
 			dbg("%s: type %x req %x", __func__,
 				req_pkt->bRequestType, req_pkt->bRequest);
 		}
-	} else
+	} else 
 		err("%s: error %d", __func__, status);
 
 	/* Resubmit urb so we continue receiving IRQ data */
-	if (status != -ESHUTDOWN && status != -ENOENT) {
+	if (status != -ESHUTDOWN && status != -ENOENT && status != -EPROTO ) {
 		err = usb_submit_urb(urb, GFP_ATOMIC);
 		if (err)
 			dbg("%s: resubmit intr urb failed. (%d)",
@@ -968,6 +986,7 @@ static int option_open(struct tty_struct *tty,
 	int i, err;
 	struct urb *urb;
 
+	ehci_hcd_recalc_work();
 	portdata = usb_get_serial_port_data(port);
 
 	dbg("%s", __func__);
@@ -1012,6 +1031,7 @@ static void option_close(struct usb_serial_port *port)
 	struct usb_serial *serial = port->serial;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __func__);
 	portdata = usb_get_serial_port_data(port);
 
@@ -1095,6 +1115,10 @@ static int option_send_setup(struct usb_serial_port *port)
 	int val = 0;
 	dbg("%s", __func__);
 
+	if( ! serial->num_interrupt_in )
+		return 0;
+
+	ehci_hcd_recalc_work();
 	portdata = usb_get_serial_port_data(port);
 
 	if (portdata->dtr_state)
@@ -1105,6 +1129,7 @@ static int option_send_setup(struct usb_serial_port *port)
 	return usb_control_msg(serial->dev,
 		usb_rcvctrlpipe(serial->dev, 0),
 		0x22, 0x21, val, ifNum, NULL, 0, USB_CTRL_SET_TIMEOUT);
+	
 }
 
 static int option_startup(struct usb_serial *serial)
@@ -1114,6 +1139,7 @@ static int option_startup(struct usb_serial *serial)
 	struct option_port_private *portdata;
 	u8 *buffer;
 
+	ehci_hcd_recalc_work();
 	dbg("%s", __func__);
 
 	/* Now setup per port private data */
@@ -1169,6 +1195,7 @@ static void stop_read_write_urbs(struct usb_serial *serial)
 	struct usb_serial_port *port;
 	struct option_port_private *portdata;
 
+	ehci_hcd_recalc_work();
 	/* Stop reading/writing urbs */
 	for (i = 0; i < serial->num_ports; ++i) {
 		port = serial->port[i];
@@ -1182,6 +1209,7 @@ static void stop_read_write_urbs(struct usb_serial *serial)
 
 static void option_disconnect(struct usb_serial *serial)
 {
+	ehci_hcd_recalc_work();
 	dbg("%s", __func__);
 
 	stop_read_write_urbs(serial);
@@ -1228,6 +1256,7 @@ static void option_release(struct usb_serial *serial)
 static int option_suspend(struct usb_serial *serial, pm_message_t message)
 {
 	dbg("%s entered", __func__);
+	
 	stop_read_write_urbs(serial);
 
 	return 0;
@@ -1241,6 +1270,8 @@ static int option_resume(struct usb_serial *serial)
 	struct option_port_private *portdata;
 
 	dbg("%s entered", __func__);
+	ehci_hcd_recalc_work();
+
 	/* get the interrupt URBs resubmitted unconditionally */
 	for (i = 0; i < serial->num_ports; i++) {
 		port = serial->port[i];

@@ -24,6 +24,11 @@
  */
 #define UL(x) _AC(x, UL)
 
+#if defined(CONFIG_RUNTIME_PHYS_OFFSET) && !defined(__ASSEMBLY__)
+extern unsigned long phys_offset;
+#define PHYS_OFFSET	phys_offset
+#endif
+
 #ifdef CONFIG_MMU
 
 /*
@@ -189,6 +194,7 @@ static inline void *phys_to_virt(unsigned long x)
 #define __virt_to_bus	__virt_to_phys
 #define __bus_to_virt	__phys_to_virt
 #define __pfn_to_bus(x)	((x) << PAGE_SHIFT)
+#define __bus_to_pfn(x) __phys_to_pfn(x)
 #endif
 
 static inline __deprecated unsigned long virt_to_bus(void *x)

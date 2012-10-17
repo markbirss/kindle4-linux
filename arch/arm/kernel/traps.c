@@ -1,7 +1,7 @@
 /*
  *  linux/arch/arm/kernel/traps.c
  *
- *  Copyright (C) 1995-2002 Russell King
+ *  Copyright (C) 1995-2009 Russell King
  *  Fragments that appear the same as linux/arch/i386/kernel/traps.c (C) Linus Torvalds
  *
  * This program is free software; you can redistribute it and/or modify
@@ -21,6 +21,7 @@
 #include <linux/hardirq.h>
 #include <linux/init.h>
 #include <linux/uaccess.h>
+#include <linux/bug.h>
 
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
@@ -239,7 +240,7 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 	}
 }
 
-DEFINE_SPINLOCK(die_lock);
+DEFINE_ATOMIC_SPINLOCK(die_lock);
 
 /*
  * This function is protected against re-entrancy.
@@ -251,12 +252,14 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 	oops_enter();
 
 	console_verbose();
-	spin_lock_irq(&die_lock);
+	atomic_spin_lock_irq(&die_lock);
 	bust_spinlocks(1);
+	if (!user_mode(regs))
+		report_bug(regs->ARM_pc, regs);
 	__die(str, err, thread, regs);
 	bust_spinlocks(0);
 	add_taint(TAINT_DIE);
-	spin_unlock_irq(&die_lock);
+	atomic_spin_unlock_irq(&die_lock);
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
@@ -281,25 +284,43 @@ void arm_notify_die(const char *str, struct pt_regs *regs,
 	}
 }
 
+#ifdef CONFIG_GENERIC_BUG
+
+int is_valid_bugaddr(unsigned long pc)
+{
+#ifdef CONFIG_THUMB2_KERNEL
+	unsigned short bkpt;
+#else
+	unsigned long bkpt;
+#endif
+
+	if (probe_kernel_address((unsigned *)pc, bkpt))
+		return 0;
+
+	return bkpt == BUG_INSTR_VALUE;
+}
+
+#endif
+
 static LIST_HEAD(undef_hook);
-static DEFINE_SPINLOCK(undef_lock);
+static DEFINE_ATOMIC_SPINLOCK(undef_lock);
 
 void register_undef_hook(struct undef_hook *hook)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&undef_lock, flags);
+	atomic_spin_lock_irqsave(&undef_lock, flags);
 	list_add(&hook->node, &undef_hook);
-	spin_unlock_irqrestore(&undef_lock, flags);
+	atomic_spin_unlock_irqrestore(&undef_lock, flags);
 }
 
 void unregister_undef_hook(struct undef_hook *hook)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&undef_lock, flags);
+	atomic_spin_lock_irqsave(&undef_lock, flags);
 	list_del(&hook->node);
-	spin_unlock_irqrestore(&undef_lock, flags);
+	atomic_spin_unlock_irqrestore(&undef_lock, flags);
 }
 
 static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
@@ -308,12 +329,12 @@ static int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 	unsigned long flags;
 	int (*fn)(struct pt_regs *regs, unsigned int instr) = NULL;
 
-	spin_lock_irqsave(&undef_lock, flags);
+	atomic_spin_lock_irqsave(&undef_lock, flags);
 	list_for_each_entry(hook, &undef_hook, node)
 		if ((instr & hook->instr_mask) == hook->instr_val &&
 		    (regs->ARM_cpsr & hook->cpsr_mask) == hook->cpsr_val)
 			fn = hook->fn;
-	spin_unlock_irqrestore(&undef_lock, flags);
+	atomic_spin_unlock_irqrestore(&undef_lock, flags);
 
 	return fn ? fn(regs, instr) : 1;
 }
@@ -666,16 +687,6 @@ baddataabort(int code, unsigned long instr, struct pt_regs *regs)
 	arm_notify_die("unknown data abort code", regs, &info, instr, 0);
 }
 
-void __attribute__((noreturn)) __bug(const char *file, int line)
-{
-	printk(KERN_CRIT"kernel BUG at %s:%d!\n", file, line);
-	*(int *)0 = 0;
-
-	/* Avoid "noreturn function does return" */
-	for (;;);
-}
-EXPORT_SYMBOL(__bug);
-
 void __readwrite_bug(const char *fn)
 {
 	printk("%s called, but not implemented\n", fn);
@@ -742,6 +753,8 @@ void __init early_trap_init(void)
 	 */
 	memcpy((void *)KERN_SIGRETURN_CODE, sigreturn_codes,
 	       sizeof(sigreturn_codes));
+	memcpy((void *)KERN_RESTART_CODE, syscall_restart_code,
+	       sizeof(syscall_restart_code));
 
 	flush_icache_range(vectors, vectors + PAGE_SIZE);
 	modify_domain(DOMAIN_USER, DOMAIN_CLIENT);

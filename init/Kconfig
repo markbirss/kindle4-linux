@@ -75,7 +75,6 @@ config INIT_ENV_ARG_LIMIT
 	  Maximum of each of the number of arguments and environment
 	  variables passed to init from the kernel command line.
 
-
 config LOCALVERSION
 	string "Local version - append to kernel release"
 	help
@@ -105,6 +104,12 @@ config LOCALVERSION_AUTO
 	    $ git rev-parse --verify HEAD
 
 	  which is done within the script "scripts/setlocalversion".)
+
+config KERNEL_NONE
+        bool "None"
+        help
+          If you want to use get a fast startup at the cost of kernel size
+          you can use an uncompressed kernel.
 
 config HAVE_KERNEL_GZIP
 	bool
@@ -318,6 +323,7 @@ choice
 
 config CLASSIC_RCU
 	bool "Classic RCU"
+	depends on !PREEMPT_RT
 	help
 	  This option selects the classic RCU implementation that is
 	  designed for best read-side performance on non-realtime
@@ -327,6 +333,7 @@ config CLASSIC_RCU
 
 config TREE_RCU
 	bool "Tree-based hierarchical RCU"
+	depends on !PREEMPT_RT
 	help
 	  This option selects the RCU implementation that is
 	  designed for very large SMP system with hundreds or
@@ -1039,6 +1046,7 @@ config SLAB
 
 config SLUB
 	bool "SLUB (Unqueued Allocator)"
+	depends on !PREEMPT_RT
 	help
 	   SLUB is a slab allocator that minimizes cache line usage
 	   instead of managing queues of cached objects (SLAB approach).
@@ -1072,6 +1080,7 @@ config TRACEPOINTS
 
 config MARKERS
 	bool "Activate markers"
+	depends on !PREEMPT_RT
 	select TRACEPOINTS
 	help
 	  Place an empty function call at each marker site. Can be

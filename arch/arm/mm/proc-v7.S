@@ -43,7 +43,14 @@ ENTRY(cpu_v7_proc_init)
 ENDPROC(cpu_v7_proc_init)
 
 ENTRY(cpu_v7_proc_fin)
-	mov	pc, lr
+	stmfd	sp!, {lr}
+	cpsid	if				@ disable interrupts
+	bl	v7_flush_kern_cache_all
+	mrc	p15, 0, r0, c1, c0, 0		@ ctrl register
+	bic	r0, r0, #0x1000			@ ...i............
+	bic	r0, r0, #0x0006			@ .............ca.
+	mcr	p15, 0, r0, c1, c0, 0		@ disable caches
+	ldmfd	sp!, {pc}
 ENDPROC(cpu_v7_proc_fin)
 
 /*
@@ -292,7 +299,7 @@ __v7_setup_stack:
 	.type	v7_processor_functions, #object
 ENTRY(v7_processor_functions)
 	.word	v7_early_abort
-	.word	pabort_ifar
+	.word	v7_pabort
 	.word	cpu_v7_proc_init
 	.word	cpu_v7_proc_fin
 	.word	cpu_v7_reset

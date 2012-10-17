@@ -46,6 +46,15 @@
 #ifdef CONFIG_MACH_ARMADILLO5X0
 #include <mach/board-armadillo5x0.h>
 #endif
+#ifdef CONFIG_MACH_MX50_YOSHI
+#include <mach/board-yoshi.h>
+#endif
+#ifdef CONFIG_MACH_MX50_YOSHIME
+#include <mach/board-yoshi.h>
+#endif
+#ifdef CONFIG_MACH_MX50_TEQUILA
+#include <mach/board-yoshi.h>
+#endif
 #ifdef CONFIG_MACH_MX35_3DS
 #include <mach/board-mx35pdk.h>
 #endif

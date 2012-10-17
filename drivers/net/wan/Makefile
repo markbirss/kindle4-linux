@@ -43,6 +43,11 @@ obj-$(CONFIG_PCI200SYN)		+= pci200syn.o
 obj-$(CONFIG_PC300TOO)		+= pc300too.o
 obj-$(CONFIG_IXP4XX_HSS)	+= ixp4xx_hss.o
 
+ifneq ($(CONFIG_YOSHI_WAN),)
+obj-y				+= mwan-core.o
+endif
+obj-$(CONFIG_YOSHI_WAN)		+= mwan.o
+
 clean-files := wanxlfw.inc
 $(obj)/wanxl.o:	$(obj)/wanxlfw.inc
 

@@ -6,6 +6,9 @@
 #include <linux/time.h>
 #include <asm/cputime.h>
 
+extern unsigned long total_suspend_time;
+extern unsigned long last_suspend_time;
+
 static int uptime_proc_show(struct seq_file *m, void *v)
 {
 	struct timespec uptime;
@@ -15,11 +18,13 @@ static int uptime_proc_show(struct seq_file *m, void *v)
 	do_posix_clock_monotonic_gettime(&uptime);
 	monotonic_to_bootbased(&uptime);
 	cputime_to_timespec(idletime, &idle);
-	seq_printf(m, "%lu.%02lu %lu.%02lu\n",
+	seq_printf(m, "%lu.%02lu %lu.%02lu %lu %lu\n",
 			(unsigned long) uptime.tv_sec,
 			(uptime.tv_nsec / (NSEC_PER_SEC / 100)),
 			(unsigned long) idle.tv_sec,
-			(idle.tv_nsec / (NSEC_PER_SEC / 100)));
+			(idle.tv_nsec / (NSEC_PER_SEC / 100)),
+			last_suspend_time,
+			total_suspend_time);
 	return 0;
 }
 

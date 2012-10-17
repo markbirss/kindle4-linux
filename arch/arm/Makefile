@@ -135,7 +135,13 @@ machine-$(CONFIG_ARCH_MSM)		:= msm
 machine-$(CONFIG_ARCH_MV78XX0)		:= mv78xx0
 machine-$(CONFIG_ARCH_MX1)		:= mx1
 machine-$(CONFIG_ARCH_MX2)		:= mx2
+machine-$(CONFIG_ARCH_MX25)		:= mx25
+machine-$(CONFIG_ARCH_MX28)		:= mx28
+machine-$(CONFIG_ARCH_MX23)		:= mx23
 machine-$(CONFIG_ARCH_MX3)		:= mx3
+machine-$(CONFIG_ARCH_MX35)		:= mx35
+machine-$(CONFIG_ARCH_MX37)		:= mx37
+machine-$(CONFIG_ARCH_MX5)		:= mx5
 machine-$(CONFIG_ARCH_NETX)		:= netx
 machine-$(CONFIG_ARCH_NS9XXX)		:= ns9xxx
 machine-$(CONFIG_ARCH_OMAP1)		:= omap1
@@ -168,6 +174,7 @@ plat-$(CONFIG_PLAT_ORION)	:= orion
 plat-$(CONFIG_PLAT_PXA)		:= pxa
 plat-$(CONFIG_PLAT_S3C24XX)	:= s3c24xx s3c
 plat-$(CONFIG_PLAT_S3C64XX)	:= s3c64xx s3c
+plat-$(CONFIG_ARCH_MXS)		:= mxs
 plat-$(CONFIG_ARCH_STMP3XXX)	:= stmp3xxx
 
 ifeq ($(CONFIG_ARCH_EBSA110),y)

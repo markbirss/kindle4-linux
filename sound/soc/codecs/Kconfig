@@ -17,6 +17,7 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_AK4104 if SPI_MASTER
 	select SND_SOC_AK4535 if I2C
 	select SND_SOC_CS4270 if I2C
+	select SND_SOC_CS42888 if I2C
 	select SND_SOC_PCM3008
 	select SND_SOC_SPDIF
 	select SND_SOC_SSM2602 if I2C
@@ -39,6 +40,7 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_WM8903 if I2C
 	select SND_SOC_WM8940 if I2C
 	select SND_SOC_WM8960 if I2C
+	select SND_SOC_WM8962 if I2C
 	select SND_SOC_WM8971 if I2C
 	select SND_SOC_WM8988 if SND_SOC_I2C_AND_SPI
 	select SND_SOC_WM8990 if I2C
@@ -74,6 +76,10 @@ config SND_SOC_AK4104
 config SND_SOC_AK4535
 	tristate
 
+config SND_SOC_AK5702
+	tristate
+	depends on I2C
+
 # Cirrus Logic CS4270 Codec
 config SND_SOC_CS4270
 	tristate
@@ -85,6 +91,9 @@ config SND_SOC_CS4270
 config SND_SOC_CS4270_VD33_ERRATA
 	bool
 	depends on SND_SOC_CS4270
+
+config SND_SOC_CS42888
+	tristate
 
 config SND_SOC_L3
        tristate
@@ -156,6 +165,12 @@ config SND_SOC_WM8940
 config SND_SOC_WM8960
 	tristate
 
+config SND_SOC_WM8962
+	tristate
+
+config SND_SOC_WM8962
+	tristate
+
 config SND_SOC_WM8971
 	tristate
 
@@ -176,3 +191,32 @@ config SND_SOC_WM9712
 
 config SND_SOC_WM9713
 	tristate
+
+config SND_SOC_SGTL5000
+	tristate
+	depends on I2C
+
+config SND_SOC_AK4647
+        tristate
+        depends on I2C
+
+config SND_SOC_STMP378X_CODEC
+	tristate
+	depends on SND_SOC
+
+config SND_SOC_STMP3XXX_SPDIF
+	tristate
+	depends on SND_SOC
+
+config SND_SOC_MXS_ADC_CODEC
+	tristate
+	depends on SND_SOC
+
+config SND_SOC_BLUETOOTH
+        tristate
+	depends on SND_SOC
+
+config SND_SOC_MXS_SPDIF
+	tristate
+	depends on SND_SOC
+

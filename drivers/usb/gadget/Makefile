@@ -28,6 +28,14 @@ obj-$(CONFIG_USB_CI13XXX)	+= ci13xxx_udc.o
 obj-$(CONFIG_USB_S3C_HSOTG)	+= s3c-hsotg.o
 obj-$(CONFIG_USB_LANGWELL)	+= langwell_udc.o
 
+ifeq ($(CONFIG_MACH_MX50_YOSHI), y)
+obj-$(CONFIG_USB_ARC)	+= arcotg_udc.o
+endif
+
+ifeq ($(CONFIG_MACH_MX50_YOSHIME), y)
+obj-$(CONFIG_USB_ARC)	+= arcotg_udc_yoshime.o
+endif
+
 #
 # USB gadget drivers
 #

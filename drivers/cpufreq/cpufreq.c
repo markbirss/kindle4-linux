@@ -822,7 +822,7 @@ static int cpufreq_add_dev(struct sys_device *sys_dev)
 	WARN_ON(ret);
 
 	init_completion(&policy->kobj_unregister);
-	INIT_WORK(&policy->update, handle_update);
+	INIT_DELAYED_WORK(&policy->update, handle_update);
 
 	/* Set governor before ->init, so that driver could check it */
 	policy->governor = CPUFREQ_DEFAULT_GOVERNOR;
@@ -1137,7 +1137,7 @@ static int cpufreq_remove_dev(struct sys_device *sys_dev)
 static void handle_update(struct work_struct *work)
 {
 	struct cpufreq_policy *policy =
-		container_of(work, struct cpufreq_policy, update);
+		container_of(work, struct cpufreq_policy, update.work);
 	unsigned int cpu = policy->cpu;
 	dprintk("handle_update for cpu %u called\n", cpu);
 	cpufreq_update_policy(cpu);
@@ -1206,7 +1206,7 @@ static unsigned int __cpufreq_get(unsigned int cpu)
 					saved value exists */
 		if (unlikely(ret_freq != policy->cur)) {
 			cpufreq_out_of_sync(cpu, policy->cur, ret_freq);
-			schedule_work(&policy->update);
+			schedule_delayed_work(&policy->update, 0);
 		}
 	}
 
@@ -1271,6 +1271,8 @@ static int cpufreq_suspend(struct sys_device *sysdev, pm_message_t pmsg)
 	if (unlikely(cpu_policy->cpu != cpu))
 		goto out;
 
+	cancel_delayed_work(&cpu_policy->update);
+
 	if (cpufreq_driver->suspend) {
 		ret = cpufreq_driver->suspend(cpu_policy, pmsg);
 		if (ret)
@@ -1327,8 +1329,7 @@ static int cpufreq_resume(struct sys_device *sysdev)
 		}
 	}
 
-	schedule_work(&cpu_policy->update);
-
+	schedule_delayed_work(&cpu_policy->update, msecs_to_jiffies(1000));
 fail:
 	cpufreq_cpu_put(cpu_policy);
 	return ret;

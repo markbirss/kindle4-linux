@@ -70,11 +70,17 @@ else
 $(obj)/uImage: LOADADDR=$(ZRELADDR)
 endif
 
-$(obj)/uImage:	$(obj)/zImage FORCE
+ifeq ($(CONFIG_KERNEL_NONE),y)
+	ARM_IMAGE := Image
+else
+	ARM_IMAGE := zImage
+endif
+
+$(obj)/uImage: $(obj)/$(ARM_IMAGE) FORCE
 	$(call if_changed,uimage)
 	@echo '  Image $@ is ready'
 
-$(obj)/bootp/bootp: $(obj)/zImage initrd FORCE
+$(obj)/bootp/bootp: $(obj)/$(ARM_IMAGE) initrd FORCE
 	$(Q)$(MAKE) $(build)=$(obj)/bootp $@
 	@:
 

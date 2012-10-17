@@ -728,7 +728,7 @@ void wext_proc_exit(struct net *net)
  */
 
 /* ---------------------------------------------------------------- */
-static int ioctl_standard_iw_point(struct iw_point *iwp, unsigned int cmd,
+noinline static int ioctl_standard_iw_point(struct iw_point *iwp, unsigned int cmd,
 				   const struct iw_ioctl_description *descr,
 				   iw_handler handler, struct net_device *dev,
 				   struct iw_request_info *info)
@@ -809,8 +809,14 @@ static int ioctl_standard_iw_point(struct iw_point *iwp, unsigned int cmd,
 
 	/* kzalloc() ensures NULL-termination for essid_compat. */
 	extra = kzalloc(extra_size, GFP_KERNEL);
-	if (!extra)
-		return -ENOMEM;
+	if (!extra) {
+		printk(KERN_WARNING "%s: allocation failure: %d\n", __FUNCTION__, extra_size);
+		extra = kzalloc(extra_size, GFP_USER);
+		if (!extra) {
+			printk(KERN_WARNING "%s: GFP_USER failed\n", __FUNCTION__);
+			return -ENOMEM;
+		}
+	}
 
 	/* If it is a SET, get all the extra data in here */
 	if (IW_IS_SET(cmd) && (iwp->length != 0)) {
@@ -872,7 +878,7 @@ out:
  * We do various checks and also take care of moving data between
  * user space and kernel space.
  */
-static int ioctl_standard_call(struct net_device *	dev,
+noinline static int ioctl_standard_call(struct net_device *	dev,
 			       struct iwreq		*iwr,
 			       unsigned int		cmd,
 			       struct iw_request_info	*info,
@@ -1366,7 +1372,7 @@ static void rtmsg_iwinfo(struct net_device *dev, char *event, int event_len)
  * Send the event on the appropriate channels.
  * May be called from interrupt context.
  */
-void wireless_send_event(struct net_device *	dev,
+noinline void wireless_send_event(struct net_device *	dev,
 			 unsigned int		cmd,
 			 union iwreq_data *	wrqu,
 			 char *			extra)

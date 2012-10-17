@@ -258,7 +258,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	 * If we're in an interrupt or have no user
 	 * context, we must not take the fault..
 	 */
-	if (in_atomic() || !mm)
+	if (in_atomic() || !mm || current->pagefault_disabled)
 		goto no_context;
 
 	/*
@@ -482,7 +482,7 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 }
 
 asmlinkage void __exception
-do_PrefetchAbort(unsigned long addr, struct pt_regs *regs)
+do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
 {
 	do_translation_fault(addr, 0, regs);
 }

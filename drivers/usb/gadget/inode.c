@@ -40,6 +40,8 @@
 #include <linux/usb/gadgetfs.h>
 #include <linux/usb/gadget.h>
 
+#include <linux/delay.h>
+#include <linux/time.h>
 
 /*
  * The gadgetfs API maps each endpoint to a file descriptor so that you
@@ -81,6 +83,9 @@ MODULE_DESCRIPTION (DRIVER_DESC);
 MODULE_AUTHOR ("David Brownell");
 MODULE_LICENSE ("GPL");
 
+/* Cancel IO, To store the bulkin and bulkout ep data. */
+static struct ep_data *gp_ep_bulkin_data;
+static struct ep_data *gp_ep_bulkout_data;
 
 /*----------------------------------------------------------------------*/
 
@@ -193,7 +198,7 @@ enum ep_state {
 };
 
 struct ep_data {
-	struct semaphore		lock;
+	struct mutex			lock;
 	enum ep_state			state;
 	atomic_t			count;
 	struct dev_data			*dev;
@@ -265,6 +270,10 @@ static const char *CHIP;
 #define INFO(dev,fmt,args...) \
 	xprintk(dev , KERN_INFO , fmt , ## args)
 
+/* Cancel IO */
+static int mtp_ctrl_cmd;
+static int gbCancelFlag;
+static unsigned long mtptimestamp;
 
 /*----------------------------------------------------------------------*/
 
@@ -274,6 +283,17 @@ static const char *CHIP;
  * stream read() and write() requests; and maybe ioctl() to get more
  * precise FIFO status when recovering from cancellation.
  */
+
+/* Cancel IO */
+static void cancel_io_process(struct work_struct *work)
+{
+	if (gp_ep_bulkout_data->req->status == -EINPROGRESS)
+		usb_ep_dequeue(gp_ep_bulkout_data->ep, gp_ep_bulkout_data->req);
+
+	if (gp_ep_bulkin_data->req->status == -EINPROGRESS)
+		usb_ep_dequeue(gp_ep_bulkin_data->ep, gp_ep_bulkin_data->req);
+}
+static DECLARE_DELAYED_WORK(cancel_work, cancel_io_process);
 
 static void epio_complete (struct usb_ep *ep, struct usb_request *req)
 {
@@ -297,10 +317,10 @@ get_ready_ep (unsigned f_flags, struct ep_data *epdata)
 	int	val;
 
 	if (f_flags & O_NONBLOCK) {
-		if (down_trylock (&epdata->lock) != 0)
+		if (mutex_trylock(&epdata->lock) != 0)
 			goto nonblock;
 		if (epdata->state != STATE_EP_ENABLED) {
-			up (&epdata->lock);
+			mutex_unlock(&epdata->lock);
 nonblock:
 			val = -EAGAIN;
 		} else
@@ -308,7 +328,8 @@ nonblock:
 		return val;
 	}
 
-	if ((val = down_interruptible (&epdata->lock)) < 0)
+	val = mutex_lock_interruptible(&epdata->lock);
+	if (val < 0)
 		return val;
 
 	switch (epdata->state) {
@@ -322,7 +343,7 @@ nonblock:
 		// FALLTHROUGH
 	case STATE_EP_UNBOUND:			/* clean disconnect */
 		val = -ENODEV;
-		up (&epdata->lock);
+		mutex_unlock(&epdata->lock);
 	}
 	return val;
 }
@@ -392,7 +413,7 @@ ep_read (struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 		if (likely (data->ep != NULL))
 			usb_ep_set_halt (data->ep);
 		spin_unlock_irq (&data->dev->lock);
-		up (&data->lock);
+		mutex_unlock(&data->lock);
 		return -EBADMSG;
 	}
 
@@ -410,7 +431,7 @@ ep_read (struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 		value = -EFAULT;
 
 free1:
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	kfree (kbuf);
 	return value;
 }
@@ -435,7 +456,7 @@ ep_write (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 		if (likely (data->ep != NULL))
 			usb_ep_set_halt (data->ep);
 		spin_unlock_irq (&data->dev->lock);
-		up (&data->lock);
+		mutex_unlock(&data->lock);
 		return -EBADMSG;
 	}
 
@@ -454,7 +475,7 @@ ep_write (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 	VDEBUG (data->dev, "%s write %zu IN, status %d\n",
 		data->name, len, (int) value);
 free1:
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	kfree (kbuf);
 	return value;
 }
@@ -465,7 +486,8 @@ ep_release (struct inode *inode, struct file *fd)
 	struct ep_data		*data = fd->private_data;
 	int value;
 
-	if ((value = down_interruptible(&data->lock)) < 0)
+	value = mutex_lock_interruptible(&data->lock);
+	if (value < 0)
 		return value;
 
 	/* clean up if this can be reopened */
@@ -475,7 +497,7 @@ ep_release (struct inode *inode, struct file *fd)
 		data->hs_desc.bDescriptorType = 0;
 		usb_ep_disable(data->ep);
 	}
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	put_ep (data);
 	return 0;
 }
@@ -506,7 +528,7 @@ static long ep_ioctl(struct file *fd, unsigned code, unsigned long value)
 	} else
 		status = -ENODEV;
 	spin_unlock_irq (&data->dev->lock);
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	return status;
 }
 
@@ -672,7 +694,7 @@ fail:
 		value = -ENODEV;
 	spin_unlock_irq(&epdata->dev->lock);
 
-	up(&epdata->lock);
+	mutex_unlock(&epdata->lock);
 
 	if (unlikely(value)) {
 		kfree(priv);
@@ -764,7 +786,8 @@ ep_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 	u32			tag;
 	int			value, length = len;
 
-	if ((value = down_interruptible (&data->lock)) < 0)
+	value = mutex_lock_interruptible(&data->lock);
+	if (value < 0)
 		return value;
 
 	if (data->state != STATE_EP_READY) {
@@ -853,7 +876,7 @@ fail:
 		data->desc.bDescriptorType = 0;
 		data->hs_desc.bDescriptorType = 0;
 	}
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	return value;
 fail0:
 	value = -EINVAL;
@@ -868,8 +891,10 @@ ep_open (struct inode *inode, struct file *fd)
 {
 	struct ep_data		*data = inode->i_private;
 	int			value = -EBUSY;
+	char *epin = "ep1in";
+	char *epout = "ep1out";
 
-	if (down_interruptible (&data->lock) != 0)
+	if (mutex_lock_interruptible(&data->lock) != 0)
 		return -EINTR;
 	spin_lock_irq (&data->dev->lock);
 	if (data->dev->state == STATE_DEV_UNBOUND)
@@ -880,11 +905,17 @@ ep_open (struct inode *inode, struct file *fd)
 		get_ep (data);
 		fd->private_data = data;
 		VDEBUG (data->dev, "%s ready\n", data->name);
+		/* Cancel IO */
+		if (0 == strcmp(data->name, epin))
+			gp_ep_bulkin_data = fd->private_data;
+
+		if (0 == strcmp(data->name, epout))
+			gp_ep_bulkout_data = fd->private_data;
 	} else
 		DBG (data->dev, "%s state %d\n",
 			data->name, data->state);
 	spin_unlock_irq (&data->dev->lock);
-	up (&data->lock);
+	mutex_unlock(&data->lock);
 	return value;
 }
 
@@ -1043,8 +1074,12 @@ ep0_read (struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 // FIXME don't call this with the spinlock held ...
 				if (copy_to_user (buf, dev->req->buf, len))
 					retval = -EFAULT;
+				else
+					/* Bug of Cancel IO 6 bytes read. */
+					retval = len;
 				clean_req (dev->gadget->ep0, dev->req);
 				/* NOTE userspace can't yet choose to stall */
+				dev->state = STATE_DEV_CONNECTED;	/* Cancel IO */
 			}
 		}
 		goto done;
@@ -1057,6 +1092,12 @@ ep0_read (struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 	}
 	len -= len % sizeof (struct usb_gadgetfs_event);
 	dev->usermode_setup = 1;
+
+    /* Cancel IO, signal abort blocked IO. */
+	if (mtp_ctrl_cmd == 1) {
+		mtp_ctrl_cmd = 0;
+		schedule_delayed_work(&cancel_work, HZ / 100);
+	}
 
 scan:
 	/* return queued events right away */
@@ -1384,6 +1425,16 @@ gadgetfs_setup (struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	struct usb_gadgetfs_event	*event;
 	u16				w_value = le16_to_cpu(ctrl->wValue);
 	u16				w_length = le16_to_cpu(ctrl->wLength);
+	struct timeval tv;
+
+    /* Cancel IO */
+	if (0x67 == ctrl->bRequest && 1 == gbCancelFlag
+	    && dev->state == STATE_DEV_SETUP)
+		dev->state = STATE_DEV_CONNECTED;
+
+	if (0x67 == ctrl->bRequest && 2 == mtp_ctrl_cmd
+	    && dev->state == STATE_DEV_SETUP)
+		dev->state = STATE_DEV_CONNECTED;
 
 	spin_lock (&dev->lock);
 	dev->setup_abort = 0;
@@ -1411,6 +1462,11 @@ gadgetfs_setup (struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	 */
 	} else if (dev->state == STATE_DEV_SETUP)
 		dev->setup_abort = 1;
+	/*Cancel IO */
+	if (mtp_ctrl_cmd == 1 && gbCancelFlag == 1 && dev->setup_abort == 1) {
+		INFO(dev, "0x64->setup\n");
+		dev->setup_abort = 0;
+	}
 
 	req->buf = dev->rbuf;
 	req->dma = DMA_ADDR_INVALID;
@@ -1543,11 +1599,63 @@ delegate:
 				/* we can't currently stall these */
 				dev->setup_can_stall = 0;
 			}
+			/* Cancel IO */
+			if (0x67 == ctrl->bRequest && 1 == gbCancelFlag) {
+				gbCancelFlag = 0;
+
+				setup_req(gadget->ep0, dev->req, 4);
+				*(unsigned long *)dev->req->buf = 0x20190004;
+				usb_ep_queue(gadget->ep0, dev->req, GFP_ATOMIC);
+
+				spin_unlock(&dev->lock);
+				return 0;
+			}
+			if (ctrl->bRequest == 0x67 && mtp_ctrl_cmd == 2) {
+				/* get status */
+				mtp_ctrl_cmd = 0;
+			}
 
 			/* state changes when reader collects event */
 			event = next_event (dev, GADGETFS_SETUP);
 			event->u.setup = *ctrl;
+			/*  Cancel IO */
+			if (0x64 == ctrl->bRequest) {
+				mtp_ctrl_cmd = 1;
+				gbCancelFlag = 1;
+
+				/* get the timestamp */
+				do_gettimeofday(&tv);
+				mtptimestamp = tv.tv_usec;
+				event->u.setup.wValue =
+				    (unsigned short)tv.tv_usec;
+			}
+			if (0x66 == ctrl->bRequest) {
+				/* get the timestamp */
+				do_gettimeofday(&tv);
+				mtptimestamp = tv.tv_usec;
+				event->u.setup.wValue =
+				    (unsigned short)tv.tv_usec;
+			}
+
 			ep0_readable (dev);
+			/* Reset request. */
+			if (ctrl->bRequest == 0x66) {	/* reset ,send ZLP */
+				mtp_ctrl_cmd = 2;
+
+				if (gp_ep_bulkout_data->req->status ==
+				    -EINPROGRESS) {
+					usb_ep_dequeue(gp_ep_bulkout_data->ep,
+						       gp_ep_bulkout_data->req);
+				}
+				if (gp_ep_bulkin_data->req->status ==
+				    -EINPROGRESS) {
+					usb_ep_dequeue(gp_ep_bulkin_data->ep,
+						       gp_ep_bulkin_data->req);
+				}
+			}
+			if (ctrl->bRequest == 0x65)
+				pr_debug("i:0x65,not supported\n");
+
 			spin_unlock (&dev->lock);
 			return 0;
 		}
@@ -1630,7 +1738,7 @@ static int activate_ep_files (struct dev_data *dev)
 		if (!data)
 			goto enomem0;
 		data->state = STATE_EP_DISABLED;
-		init_MUTEX (&data->lock);
+		mutex_init(&data->lock);
 		init_waitqueue_head (&data->wait);
 
 		strncpy (data->name, ep->name, sizeof (data->name) - 1);

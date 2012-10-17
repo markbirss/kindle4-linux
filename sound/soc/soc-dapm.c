@@ -764,10 +764,10 @@ static int dapm_power_widgets(struct snd_soc_codec *codec, int event)
 	list_for_each_entry(w, &codec->dapm_widgets, list) {
 		switch (w->id) {
 		case snd_soc_dapm_pre:
-			list_add_tail(&codec->down_list, &w->power_list);
+			list_add_tail(&w->power_list, &codec->down_list);
 			break;
 		case snd_soc_dapm_post:
-			list_add_tail(&codec->up_list, &w->power_list);
+			list_add_tail(&w->power_list, &codec->up_list);
 			break;
 
 		default:

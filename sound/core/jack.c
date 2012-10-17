@@ -65,6 +65,9 @@ static int snd_jack_dev_register(struct snd_device *device)
 	if (!jack->input_dev->dev.parent)
 		jack->input_dev->dev.parent = snd_card_get_device_link(card);
 
+	if (jack->type & SND_JACK_BTN_0)
+		input_set_capability(jack->input_dev, EV_KEY, BTN_0);
+
 	err = input_register_device(jack->input_dev);
 	if (err == 0)
 		jack->registered = 1;
@@ -162,6 +165,10 @@ void snd_jack_report(struct snd_jack *jack, int status)
 
 	if (!jack)
 		return;
+
+	if (jack->type & SND_JACK_BTN_0)
+		input_report_key(jack->input_dev, BTN_0,
+				 status & SND_JACK_BTN_0);
 
 	for (i = 0; i < ARRAY_SIZE(jack_types); i++) {
 		int testbit = 1 << i;

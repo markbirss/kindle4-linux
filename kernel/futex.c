@@ -392,9 +392,9 @@ static void free_pi_state(struct futex_pi_state *pi_state)
 	 * and has cleaned up the pi_state already
 	 */
 	if (pi_state->owner) {
-		spin_lock_irq(&pi_state->owner->pi_lock);
+		atomic_spin_lock_irq(&pi_state->owner->pi_lock);
 		list_del_init(&pi_state->list);
-		spin_unlock_irq(&pi_state->owner->pi_lock);
+		atomic_spin_unlock_irq(&pi_state->owner->pi_lock);
 
 		rt_mutex_proxy_unlock(&pi_state->pi_mutex, pi_state->owner);
 	}
@@ -459,18 +459,18 @@ void exit_pi_state_list(struct task_struct *curr)
 	 * pi_state_list anymore, but we have to be careful
 	 * versus waiters unqueueing themselves:
 	 */
-	spin_lock_irq(&curr->pi_lock);
+	atomic_spin_lock_irq(&curr->pi_lock);
 	while (!list_empty(head)) {
 
 		next = head->next;
 		pi_state = list_entry(next, struct futex_pi_state, list);
 		key = pi_state->key;
 		hb = hash_futex(&key);
-		spin_unlock_irq(&curr->pi_lock);
+		atomic_spin_unlock_irq(&curr->pi_lock);
 
 		spin_lock(&hb->lock);
 
-		spin_lock_irq(&curr->pi_lock);
+		atomic_spin_lock_irq(&curr->pi_lock);
 		/*
 		 * We dropped the pi-lock, so re-check whether this
 		 * task still owns the PI-state:
@@ -484,15 +484,15 @@ void exit_pi_state_list(struct task_struct *curr)
 		WARN_ON(list_empty(&pi_state->list));
 		list_del_init(&pi_state->list);
 		pi_state->owner = NULL;
-		spin_unlock_irq(&curr->pi_lock);
+		atomic_spin_unlock_irq(&curr->pi_lock);
 
 		rt_mutex_unlock(&pi_state->pi_mutex);
 
 		spin_unlock(&hb->lock);
 
-		spin_lock_irq(&curr->pi_lock);
+		atomic_spin_lock_irq(&curr->pi_lock);
 	}
-	spin_unlock_irq(&curr->pi_lock);
+	atomic_spin_unlock_irq(&curr->pi_lock);
 }
 
 static int
@@ -547,7 +547,7 @@ lookup_pi_state(u32 uval, struct futex_hash_bucket *hb,
 	 * change of the task flags, we do this protected by
 	 * p->pi_lock:
 	 */
-	spin_lock_irq(&p->pi_lock);
+	atomic_spin_lock_irq(&p->pi_lock);
 	if (unlikely(p->flags & PF_EXITING)) {
 		/*
 		 * The task is on the way out. When PF_EXITPIDONE is
@@ -556,7 +556,7 @@ lookup_pi_state(u32 uval, struct futex_hash_bucket *hb,
 		 */
 		int ret = (p->flags & PF_EXITPIDONE) ? -ESRCH : -EAGAIN;
 
-		spin_unlock_irq(&p->pi_lock);
+		atomic_spin_unlock_irq(&p->pi_lock);
 		put_task_struct(p);
 		return ret;
 	}
@@ -575,7 +575,7 @@ lookup_pi_state(u32 uval, struct futex_hash_bucket *hb,
 	WARN_ON(!list_empty(&pi_state->list));
 	list_add(&pi_state->list, &p->pi_state_list);
 	pi_state->owner = p;
-	spin_unlock_irq(&p->pi_lock);
+	atomic_spin_unlock_irq(&p->pi_lock);
 
 	put_task_struct(p);
 
@@ -713,7 +713,7 @@ retry:
  * The hash bucket lock must be held when this is called.
  * Afterwards, the futex_q must not be accessed.
  */
-static void wake_futex(struct futex_q *q)
+static void wake_futex(struct task_struct **wake_list, struct futex_q *q)
 {
 	struct task_struct *p = q->task;
 
@@ -736,8 +736,51 @@ static void wake_futex(struct futex_q *q)
 	smp_wmb();
 	q->lock_ptr = NULL;
 
-	wake_up_state(p, TASK_NORMAL);
-	put_task_struct(p);
+	/*
+	 * Atomically grab the task, if ->futex_wakeup is !0 already it means
+	 * its already queued (either by us or someone else) and will get the
+	 * wakeup due to that.
+	 *
+	 * This cmpxchg() implies a full barrier, which pairs with the write
+	 * barrier implied by the wakeup in wake_futex_list().
+	 */
+	if (cmpxchg(&p->futex_wakeup, 0, p) != 0) {
+		/*
+		 * It was already queued, drop the extra ref and we're done.
+		 */
+		put_task_struct(p);
+		return;
+	}
+
+	/*
+	 * Put the task on our wakeup list by atomically switching it with
+	 * the list head. (XXX its a local list, no possible concurrency,
+	 * this could be written without cmpxchg).
+	 */
+	do {
+		p->futex_wakeup = *wake_list;
+	} while (cmpxchg(wake_list, p->futex_wakeup, p) != p->futex_wakeup);
+}
+
+/*
+ * For each task on the list, deliver the pending wakeup and release the
+ * task reference obtained in wake_futex().
+ */
+static void wake_futex_list(struct task_struct *head)
+{
+	while (head != &init_task) {
+		struct task_struct *next = head->futex_wakeup;
+
+		head->futex_wakeup = NULL;
+		/*
+		 * wake_up_state() implies a wmb() to pair with the queueing
+		 * in wake_futex() so as to not miss wakeups.
+		 */
+		wake_up_state(head, TASK_NORMAL);
+		put_task_struct(head);
+
+		head = next;
+	}
 }
 
 static int wake_futex_pi(u32 __user *uaddr, u32 uval, struct futex_q *this)
@@ -749,7 +792,7 @@ static int wake_futex_pi(u32 __user *uaddr, u32 uval, struct futex_q *this)
 	if (!pi_state)
 		return -EINVAL;
 
-	spin_lock(&pi_state->pi_mutex.wait_lock);
+	atomic_spin_lock(&pi_state->pi_mutex.wait_lock);
 	new_owner = rt_mutex_next_owner(&pi_state->pi_mutex);
 
 	/*
@@ -778,23 +821,23 @@ static int wake_futex_pi(u32 __user *uaddr, u32 uval, struct futex_q *this)
 		else if (curval != uval)
 			ret = -EINVAL;
 		if (ret) {
-			spin_unlock(&pi_state->pi_mutex.wait_lock);
+			atomic_spin_unlock(&pi_state->pi_mutex.wait_lock);
 			return ret;
 		}
 	}
 
-	spin_lock_irq(&pi_state->owner->pi_lock);
+	atomic_spin_lock_irq(&pi_state->owner->pi_lock);
 	WARN_ON(list_empty(&pi_state->list));
 	list_del_init(&pi_state->list);
-	spin_unlock_irq(&pi_state->owner->pi_lock);
+	atomic_spin_unlock_irq(&pi_state->owner->pi_lock);
 
-	spin_lock_irq(&new_owner->pi_lock);
+	atomic_spin_lock_irq(&new_owner->pi_lock);
 	WARN_ON(!list_empty(&pi_state->list));
 	list_add(&pi_state->list, &new_owner->pi_state_list);
 	pi_state->owner = new_owner;
-	spin_unlock_irq(&new_owner->pi_lock);
+	atomic_spin_unlock_irq(&new_owner->pi_lock);
 
-	spin_unlock(&pi_state->pi_mutex.wait_lock);
+	atomic_spin_unlock(&pi_state->pi_mutex.wait_lock);
 	rt_mutex_unlock(&pi_state->pi_mutex);
 
 	return 0;
@@ -851,6 +894,7 @@ static int futex_wake(u32 __user *uaddr, int fshared, int nr_wake, u32 bitset)
 	struct futex_q *this, *next;
 	struct plist_head *head;
 	union futex_key key = FUTEX_KEY_INIT;
+	struct task_struct *wake_list = &init_task;
 	int ret;
 
 	if (!bitset)
@@ -875,7 +919,7 @@ static int futex_wake(u32 __user *uaddr, int fshared, int nr_wake, u32 bitset)
 			if (!(this->bitset & bitset))
 				continue;
 
-			wake_futex(this);
+			wake_futex(&wake_list, this);
 			if (++ret >= nr_wake)
 				break;
 		}
@@ -883,6 +927,8 @@ static int futex_wake(u32 __user *uaddr, int fshared, int nr_wake, u32 bitset)
 
 	spin_unlock(&hb->lock);
 	put_futex_key(fshared, &key);
+
+	wake_futex_list(wake_list);
 out:
 	return ret;
 }
@@ -899,6 +945,7 @@ futex_wake_op(u32 __user *uaddr1, int fshared, u32 __user *uaddr2,
 	struct futex_hash_bucket *hb1, *hb2;
 	struct plist_head *head;
 	struct futex_q *this, *next;
+	struct task_struct *wake_list = &init_task;
 	int ret, op_ret;
 
 retry:
@@ -949,7 +996,7 @@ retry_private:
 
 	plist_for_each_entry_safe(this, next, head, list) {
 		if (match_futex (&this->key, &key1)) {
-			wake_futex(this);
+			wake_futex(&wake_list, this);
 			if (++ret >= nr_wake)
 				break;
 		}
@@ -961,7 +1008,7 @@ retry_private:
 		op_ret = 0;
 		plist_for_each_entry_safe(this, next, head, list) {
 			if (match_futex (&this->key, &key2)) {
-				wake_futex(this);
+				wake_futex(&wake_list, this);
 				if (++op_ret >= nr_wake2)
 					break;
 			}
@@ -974,6 +1021,8 @@ out_put_keys:
 	put_futex_key(fshared, &key2);
 out_put_key1:
 	put_futex_key(fshared, &key1);
+
+	wake_futex_list(wake_list);
 out:
 	return ret;
 }
@@ -999,7 +1048,7 @@ void requeue_futex(struct futex_q *q, struct futex_hash_bucket *hb1,
 		plist_add(&q->list, &hb2->chain);
 		q->lock_ptr = &hb2->lock;
 #ifdef CONFIG_DEBUG_PI_LIST
-		q->list.plist.lock = &hb2->lock;
+		q->list.plist.slock = &hb2->lock;
 #endif
 	}
 	get_futex_key_refs(key2);
@@ -1036,7 +1085,7 @@ void requeue_pi_wake_futex(struct futex_q *q, union futex_key *key,
 
 	q->lock_ptr = &hb->lock;
 #ifdef CONFIG_DEBUG_PI_LIST
-	q->list.plist.lock = &hb->lock;
+	q->list.plist.slock = &hb->lock;
 #endif
 
 	wake_up_state(q->task, TASK_NORMAL);
@@ -1128,6 +1177,7 @@ static int futex_requeue(u32 __user *uaddr1, int fshared, u32 __user *uaddr2,
 	struct futex_hash_bucket *hb1, *hb2;
 	struct plist_head *head1;
 	struct futex_q *this, *next;
+	struct task_struct *wake_list = &init_task;
 	u32 curval2;
 
 	if (requeue_pi) {
@@ -1272,7 +1322,7 @@ retry_private:
 		 * woken by futex_unlock_pi().
 		 */
 		if (++task_count <= nr_wake && !requeue_pi) {
-			wake_futex(this);
+			wake_futex(&wake_list, this);
 			continue;
 		}
 
@@ -1318,6 +1368,8 @@ out_put_keys:
 	put_futex_key(fshared, &key2);
 out_put_key1:
 	put_futex_key(fshared, &key1);
+
+	wake_futex_list(wake_list);
 out:
 	if (pi_state != NULL)
 		free_pi_state(pi_state);
@@ -1353,7 +1405,7 @@ static inline void queue_me(struct futex_q *q, struct futex_hash_bucket *hb)
 
 	plist_node_init(&q->list, prio);
 #ifdef CONFIG_DEBUG_PI_LIST
-	q->list.plist.lock = &hb->lock;
+	q->list.plist.slock = &hb->lock;
 #endif
 	plist_add(&q->list, &hb->chain);
 	q->task = current;
@@ -1490,18 +1542,18 @@ retry:
 	 * itself.
 	 */
 	if (pi_state->owner != NULL) {
-		spin_lock_irq(&pi_state->owner->pi_lock);
+		atomic_spin_lock_irq(&pi_state->owner->pi_lock);
 		WARN_ON(list_empty(&pi_state->list));
 		list_del_init(&pi_state->list);
-		spin_unlock_irq(&pi_state->owner->pi_lock);
+		atomic_spin_unlock_irq(&pi_state->owner->pi_lock);
 	}
 
 	pi_state->owner = newowner;
 
-	spin_lock_irq(&newowner->pi_lock);
+	atomic_spin_lock_irq(&newowner->pi_lock);
 	WARN_ON(!list_empty(&pi_state->list));
 	list_add(&pi_state->list, &newowner->pi_state_list);
-	spin_unlock_irq(&newowner->pi_lock);
+	atomic_spin_unlock_irq(&newowner->pi_lock);
 	return 0;
 
 	/*

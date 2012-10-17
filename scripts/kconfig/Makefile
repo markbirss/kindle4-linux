@@ -96,7 +96,12 @@ check-lxdialog  := $(srctree)/$(src)/lxdialog/check-lxdialog.sh
 # Use recursively expanded variables so we do not call gcc unless
 # we really need to do so. (Do not call gcc as part of make mrproper)
 HOST_EXTRACFLAGS = $(shell $(CONFIG_SHELL) $(check-lxdialog) -ccflags)
-HOST_LOADLIBES   = $(shell $(CONFIG_SHELL) $(check-lxdialog) -ldflags $(HOSTCC))
+HAVE_NCURSES = $(shell ls /usr/lib/libncurses.so 2>/dev/null)
+ifeq ($(HAVE_NCURSES),/usr/lib/libncurses.so)
+	HOST_LOADLIBES   = -lncurses
+else
+	HOST_LOADLIBES   = $(shell $(CONFIG_SHELL) $(check-lxdialog) -ldflags $(HOSTCC))
+endif
 
 HOST_EXTRACFLAGS += -DLOCALE
 

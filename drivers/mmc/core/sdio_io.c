@@ -64,7 +64,7 @@ int sdio_enable_func(struct sdio_func *func)
 	BUG_ON(!func);
 	BUG_ON(!func->card);
 
-	pr_debug("SDIO: Enabling device %s...\n", sdio_func_id(func));
+	pr_info("SDIO: Enabling device %s...\n", sdio_func_id(func));
 
 	ret = mmc_io_rw_direct(func->card, 0, 0, SDIO_CCCR_IOEx, 0, &reg);
 	if (ret)
@@ -76,7 +76,7 @@ int sdio_enable_func(struct sdio_func *func)
 	if (ret)
 		goto err;
 
-	timeout = jiffies + msecs_to_jiffies(func->enable_timeout);
+	timeout = jiffies + HZ;
 
 	while (1) {
 		ret = mmc_io_rw_direct(func->card, 0, 0, SDIO_CCCR_IORx, 0, &reg);
@@ -89,12 +89,12 @@ int sdio_enable_func(struct sdio_func *func)
 			goto err;
 	}
 
-	pr_debug("SDIO: Enabled device %s\n", sdio_func_id(func));
+	pr_info("SDIO: Enabled device %s\n", sdio_func_id(func));
 
 	return 0;
 
 err:
-	pr_debug("SDIO: Failed to enable device %s\n", sdio_func_id(func));
+	pr_info("SDIO: Failed to enable device %s\n", sdio_func_id(func));
 	return ret;
 }
 EXPORT_SYMBOL_GPL(sdio_enable_func);
@@ -399,6 +399,36 @@ void sdio_writeb(struct sdio_func *func, u8 b, unsigned int addr, int *err_ret)
 		*err_ret = ret;
 }
 EXPORT_SYMBOL_GPL(sdio_writeb);
+
+ /**
+ *	sdio_writeb_readb - write and read a byte from SDIO function
+ *	@func: SDIO function to access
+ *	@write_byte: byte to write
+ *	@addr: address to write to
+ *	@err_ret: optional status value from transfer
+ *
+ *	Performs a RAW (Read after Write) operation as defined by SDIO spec -
+ *	single byte is written to address space of a given SDIO function and
+ *	response is read back from the same address, both using single request.
+ *	If there is a problem with the operation, 0xff is returned and
+ *	@err_ret will contain the error code.
+ */
+u8 sdio_writeb_readb(struct sdio_func *func, u8 write_byte,
+	unsigned int addr, int *err_ret)
+{
+	int ret;
+	u8 val;
+
+	ret = mmc_io_rw_direct(func->card, 1, func->num, addr,
+			write_byte, &val);
+	if (err_ret)
+		*err_ret = ret;
+	if (ret)
+		val = 0xff;
+
+	return val;
+}
+EXPORT_SYMBOL_GPL(sdio_writeb_readb);
 
 /**
  *	sdio_memcpy_fromio - read a chunk of memory from a SDIO function

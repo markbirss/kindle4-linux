@@ -501,4 +501,7 @@ config SBNI_MULTILINE
 
 	  If unsure, say N.
 
+config YOSHI_WAN
+	tristate "YOSHI WAN module support"
+	depends on (MACH_MX50_YOSHI || MACH_MX50_YOSHIME)
 endif # WAN

@@ -43,7 +43,7 @@ struct sys_timer *system_timer;
 
 #if defined(CONFIG_RTC_DRV_CMOS) || defined(CONFIG_RTC_DRV_CMOS_MODULE)
 /* this needs a better home */
-DEFINE_SPINLOCK(rtc_lock);
+DEFINE_ATOMIC_SPINLOCK(rtc_lock);
 
 #ifdef CONFIG_RTC_DRV_CMOS_MODULE
 EXPORT_SYMBOL(rtc_lock);
@@ -79,7 +79,7 @@ EXPORT_SYMBOL(profile_pc);
 /*
  * hook for setting the RTC's idea of the current time.
  */
-int (*set_rtc)(void);
+int (*set_rtc)(struct timespec now);
 
 #ifndef CONFIG_GENERIC_TIME
 static unsigned long dummy_gettimeoffset(void)
@@ -88,34 +88,12 @@ static unsigned long dummy_gettimeoffset(void)
 }
 #endif
 
-static unsigned long next_rtc_update;
-
-/*
- * If we have an externally synchronized linux clock, then update
- * CMOS clock accordingly every ~11 minutes.  set_rtc() has to be
- * called as close as possible to 500 ms before the new second
- * starts.
- */
-static inline void do_set_rtc(void)
+int update_persistent_clock(struct timespec now)
 {
-	if (!ntp_synced() || set_rtc == NULL)
-		return;
+	if (set_rtc == NULL)
+		return -1;
 
-	if (next_rtc_update &&
-	    time_before((unsigned long)xtime.tv_sec, next_rtc_update))
-		return;
-
-	if (xtime.tv_nsec < 500000000 - ((unsigned) tick_nsec >> 1) &&
-	    xtime.tv_nsec >= 500000000 + ((unsigned) tick_nsec >> 1))
-		return;
-
-	if (set_rtc())
-		/*
-		 * rtc update failed.  Try again in 60s
-		 */
-		next_rtc_update = xtime.tv_sec + 60;
-	else
-		next_rtc_update = xtime.tv_sec + 660;
+	return set_rtc(now);
 }
 
 #ifdef CONFIG_LEDS
@@ -244,11 +222,11 @@ void do_gettimeofday(struct timeval *tv)
 	unsigned long usec, sec;
 
 	do {
-		seq = read_seqbegin_irqsave(&xtime_lock, flags);
+		seq = read_atomic_seqbegin_irqsave(&xtime_lock, flags);
 		usec = system_timer->offset();
 		sec = xtime.tv_sec;
 		usec += xtime.tv_nsec / 1000;
-	} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));
+	} while (read_atomic_seqretry_irqrestore(&xtime_lock, seq, flags));
 
 	/* usec may have gone up a lot: be safe */
 	while (usec >= 1000000) {
@@ -270,7 +248,7 @@ int do_settimeofday(struct timespec *tv)
 	if ((unsigned long)tv->tv_nsec >= NSEC_PER_SEC)
 		return -EINVAL;
 
-	write_seqlock_irq(&xtime_lock);
+	write_atomic_seqlock_irq(&xtime_lock);
 	/*
 	 * This is revolting. We need to set "xtime" correctly. However, the
 	 * value in this location is the value at the most recent update of
@@ -286,7 +264,7 @@ int do_settimeofday(struct timespec *tv)
 	set_normalized_timespec(&wall_to_monotonic, wtm_sec, wtm_nsec);
 
 	ntp_clear();
-	write_sequnlock_irq(&xtime_lock);
+	write_atomic_sequnlock_irq(&xtime_lock);
 	clock_was_set();
 	return 0;
 }
@@ -304,9 +282,10 @@ EXPORT_SYMBOL(do_settimeofday);
  */
 void save_time_delta(struct timespec *delta, struct timespec *rtc)
 {
+	struct timespec now = current_kernel_time();
 	set_normalized_timespec(delta,
-				xtime.tv_sec - rtc->tv_sec,
-				xtime.tv_nsec - rtc->tv_nsec);
+				now.tv_sec - rtc->tv_sec,
+				now.tv_nsec - rtc->tv_nsec);
 }
 EXPORT_SYMBOL(save_time_delta);
 
@@ -335,10 +314,9 @@ void timer_tick(void)
 {
 	profile_tick(CPU_PROFILING);
 	do_leds();
-	do_set_rtc();
-	write_seqlock(&xtime_lock);
+	write_atomic_seqlock(&xtime_lock);
 	do_timer(1);
-	write_sequnlock(&xtime_lock);
+	write_atomic_sequnlock(&xtime_lock);
 #ifndef CONFIG_SMP
 	update_process_times(user_mode(get_irq_regs()));
 #endif

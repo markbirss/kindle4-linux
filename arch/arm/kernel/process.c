@@ -174,9 +174,11 @@ void cpu_idle(void)
 		}
 		leds_event(led_idle_end);
 		tick_nohz_restart_sched_tick();
-		preempt_enable_no_resched();
-		schedule();
+		local_irq_disable();
+		__preempt_enable_no_resched();
+		__schedule();
 		preempt_disable();
+		local_irq_enable();
 	}
 }
 
@@ -192,6 +194,7 @@ __setup("reboot=", reboot_setup);
 
 void machine_halt(void)
 {
+	machine_power_off();
 }
 
 

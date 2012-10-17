@@ -455,6 +455,10 @@
  * Unimplemented (or alternatively implemented) syscalls
  */
 #define __IGNORE_fadvise64_64		1
+#define __IGNORE_migrate_pages		1
+#define __IGNORE_pselect6		1
+#define __IGNORE_ppoll			1
+#define __IGNORE_epoll_pwait		1
 
 #endif /* __KERNEL__ */
 #endif /* __ASM_ARM_UNISTD_H */

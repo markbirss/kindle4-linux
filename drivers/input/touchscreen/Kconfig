@@ -225,6 +225,45 @@ config TOUCHSCREEN_HP7XX
 	  To compile this driver as a module, choose M here: the
 	  module will be called jornada720_ts.
 
+config TOUCHSCREEN_MXC
+	tristate "Atlas Lite Touchscreen Driver"
+	depends on MXC_MC13892_ADC
+	help
+	  Say Y here if you have an Atlas Lite 4-wire Resistive Touch support
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mc13892_ts.
+
+config TOUCHSCREEN_IMX_ADC
+	tristate "Freescale i.MX ADC touchscreen input driver"
+	depends on IMX_ADC
+	help
+	  Say Y here if you have a Freescale i.MX based board with a
+	  touchscreen interfaced to the processor's integrated ADC.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx_adc_ts.
+
+config TOUCHSCREEN_STMP3XXX
+	tristate "STMP3XXX LRADC-based touchscreen"
+	depends on ARCH_STMP3XXX
+	select SERIO
+	help
+	  Say Y here if you want to enable TMP3XXX LRADC-based touchscreen.
+	  module will be called stmp3xxx_ts.
+
+config TOUCHSCREEN_MXS
+	tristate "MXS LRADC-based touchscreen"
+	depends on ARCH_MXS
+	select SERIO
+	help
+	  Say Y here if you want to enable MXS LRADC-based touchscreen.
+	  module will be called mxs-ts.
+
 config TOUCHSCREEN_HTCPEN
 	tristate "HTC Shift X9500 touchscreen"
 	depends on ISA
@@ -497,5 +536,38 @@ config TOUCHSCREEN_W90X900
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called w90p910_ts.
+
+config TOUCHSCREEN_ZFORCE
+	tristate "Neonode ZForce touchscreen driver"
+	depends on I2C
+	help
+		Say Y here if you have a Neonode ZForce based touchscreen.
+
+		If unsure, say N.
+
+		To compile this driver as a module, choose M here: the
+		module will be called zforce.
+
+config TOUCHSCREEN_ELAN
+	tristate "ELAN touchscreen driver"
+	depends on I2C
+	help
+	  Say Y here if you have an ELAN based touchscreen.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called elan_touch_i2c.
+
+config TOUCHSCREEN_CYPRESS
+	tristate "CYPRESS touchscreen driver"
+	depends on I2C
+	help
+	  Say Y here if you have an CYPRESS based touchscreen.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cyttsp.
 
 endif
