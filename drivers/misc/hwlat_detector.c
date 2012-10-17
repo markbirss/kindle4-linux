@@ -191,17 +191,11 @@ static struct sample *buffer_get_sample(struct sample *sample)
 	if (!sample)
 		return NULL;
 
-	/* ring_buffers are per-cpu but we just want any value */
-	/* so we'll start with this cpu and try others if not */
-	/* Steven is planning to add a generic mechanism */
 	mutex_lock(&ring_buffer_mutex);
-	e = ring_buffer_consume(ring_buffer, smp_processor_id(), NULL);
-	if (!e) {
-		for_each_online_cpu(cpu) {
-			e = ring_buffer_consume(ring_buffer, cpu, NULL);
-			if (e)
-				break;
-		}
+	for_each_online_cpu(cpu) {
+		e = ring_buffer_consume(ring_buffer, cpu, NULL);
+		if (e)
+			break;
 	}
 
 	if (e) {
@@ -607,7 +601,11 @@ static ssize_t  debug_enable_fwrite(struct file *filp,
 		if (!enabled)
 			goto unlock;
 		enabled = 0;
-		stop_kthread();
+		err = stop_kthread();
+		if (err) {
+			printk(KERN_ERR BANNER "cannot stop kthread\n");
+			return -EFAULT;
+		}
 		wake_up(&data.wq);		/* reader(s) should return */
 	}
 unlock:
@@ -1194,9 +1192,13 @@ out:
  */
 static void detector_exit(void)
 {
+	int err;
+
 	if (enabled) {
 		enabled = 0;
-		stop_kthread();
+		err = stop_kthread();
+		if (err)
+			printk(KERN_ERR BANNER "cannot stop kthread\n");
 	}
 
 	free_debugfs();

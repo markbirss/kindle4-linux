@@ -48,15 +48,7 @@ static unsigned long total_sleep_time;		/* seconds */
 /* flag for if timekeeping is suspended */
 int __read_mostly timekeeping_suspended;
 
-static struct timespec xtime_cache __attribute__ ((aligned (16)));
-void update_xtime_cache(u64 nsec)
-{
-	xtime_cache = xtime;
-	timespec_add_ns(&xtime_cache, nsec);
-}
-
 struct clocksource *clock;
-
 
 #ifdef CONFIG_GENERIC_TIME
 /**
@@ -232,8 +224,6 @@ int do_settimeofday(struct timespec *tv)
 	wall_to_monotonic = timespec_sub(wall_to_monotonic, ts_delta);
 
 	xtime = *tv;
-
-	update_xtime_cache(0);
 
 	clock->error = 0;
 	ntp_clear();
@@ -434,8 +424,7 @@ void __init timekeeping_init(void)
 	xtime.tv_sec = sec;
 	xtime.tv_nsec = 0;
 	set_normalized_timespec(&wall_to_monotonic,
-		-xtime.tv_sec, -xtime.tv_nsec);
-	update_xtime_cache(0);
+				-xtime.tv_sec, -xtime.tv_nsec);
 	total_sleep_time = 0;
 	write_atomic_sequnlock_irqrestore(&xtime_lock, flags);
 }
@@ -467,7 +456,6 @@ static int timekeeping_resume(struct sys_device *dev)
 		wall_to_monotonic.tv_sec -= sleep_length;
 		total_sleep_time += sleep_length;
 	}
-	update_xtime_cache(0);
 	/* re-base the last cycle value */
 	clock->cycle_last = 0;
 	clock->cycle_last = clocksource_read(clock);
@@ -609,6 +597,49 @@ static void clocksource_adjust(s64 offset)
 }
 
 /**
+ * logarithmic_accumulation - shifted accumulation of cycles
+ *
+ * This functions accumulates a shifted interval of cycles into
+ * into a shifted interval nanoseconds. Allows for O(log) accumulation
+ * loop.
+ *
+ * Returns the unconsumed cycles.
+ */
+static cycle_t logarithmic_accumulation(cycle_t offset, int shift)
+{
+	u64 nsecps = (u64)NSEC_PER_SEC << clock->shift;
+
+	/* If the offset is smaller then a shifted interval, do nothing */
+	if (offset < clock->cycle_interval<<shift)
+		return offset;
+
+	/* Accumulate one shifted interval */
+	offset -= clock->cycle_interval << shift;
+	clock->cycle_last += clock->cycle_interval << shift;
+
+	clock->xtime_nsec += clock->xtime_interval << shift;
+	while (clock->xtime_nsec >= nsecps) {
+		clock->xtime_nsec -= nsecps;
+		xtime.tv_sec++;
+		second_overflow();
+	}
+
+	/* Accumulate into raw time */
+	clock->raw_time.tv_nsec += clock->raw_interval << shift;;
+	while (clock->raw_time.tv_nsec >= NSEC_PER_SEC) {
+		clock->raw_time.tv_nsec -= NSEC_PER_SEC;
+		clock->raw_time.tv_sec++;
+	}
+
+	/* Accumulate error between NTP and clock interval */
+	clock->error += tick_length << shift;
+	clock->error -= clock->xtime_interval <<
+				(NTP_SCALE_SHIFT - clock->shift + shift);
+
+	return offset;
+}
+
+/**
  * update_wall_time - Uses the current clocksource to increment the wall time
  *
  * Called from the timer interrupt, must hold a write on xtime_lock.
@@ -616,6 +647,7 @@ static void clocksource_adjust(s64 offset)
 void update_wall_time(void)
 {
 	cycle_t offset;
+	int shift = 0, maxshift;
 
 	/* Make sure we're fully resumed: */
 	if (unlikely(timekeeping_suspended))
@@ -628,30 +660,22 @@ void update_wall_time(void)
 #endif
 	clock->xtime_nsec = (s64)xtime.tv_nsec << clock->shift;
 
-	/* normally this loop will run just once, however in the
-	 * case of lost or late ticks, it will accumulate correctly.
+	/*
+	 * With NO_HZ we may have to accumulate many cycle_intervals
+	 * (think "ticks") worth of time at once. To do this efficiently,
+	 * we calculate the largest doubling multiple of cycle_intervals
+	 * that is smaller then the offset. We then accumulate that
+	 * chunk in one go, and then try to consume the next smaller
+	 * doubled multiple.
 	 */
+	shift = ilog2(offset) - ilog2(clock->cycle_interval);
+	shift = max(0, shift);
+	/* Bound shift to one less then what overflows tick_length */
+	maxshift = (8*sizeof(tick_length) - (ilog2(tick_length)+1)) - 1;
+	shift = min(shift, maxshift);
 	while (offset >= clock->cycle_interval) {
-		/* accumulate one interval */
-		offset -= clock->cycle_interval;
-		clock->cycle_last += clock->cycle_interval;
-
-		clock->xtime_nsec += clock->xtime_interval;
-		if (clock->xtime_nsec >= (u64)NSEC_PER_SEC << clock->shift) {
-			clock->xtime_nsec -= (u64)NSEC_PER_SEC << clock->shift;
-			xtime.tv_sec++;
-			second_overflow();
-		}
-
-		clock->raw_time.tv_nsec += clock->raw_interval;
-		if (clock->raw_time.tv_nsec >= NSEC_PER_SEC) {
-			clock->raw_time.tv_nsec -= NSEC_PER_SEC;
-			clock->raw_time.tv_sec++;
-		}
-
-		/* accumulate error between NTP and clock interval */
-		clock->error += tick_length;
-		clock->error -= clock->xtime_interval << (NTP_SCALE_SHIFT - clock->shift);
+		offset = logarithmic_accumulation(offset, shift);
+		shift--;
 	}
 
 	/* correct the clock when NTP error is too big */
@@ -685,8 +709,6 @@ void update_wall_time(void)
 	xtime.tv_nsec = ((s64)clock->xtime_nsec >> clock->shift) + 1;
 	clock->xtime_nsec -= (s64)xtime.tv_nsec << clock->shift;
 	clock->error += clock->xtime_nsec << (NTP_SCALE_SHIFT - clock->shift);
-
-	update_xtime_cache(cyc2ns(clock, offset));
 
 	/* check to see if there is a new clocksource to use */
 	change_clocksource();
@@ -722,10 +744,9 @@ void monotonic_to_bootbased(struct timespec *ts)
 
 unsigned long get_seconds(void)
 {
-	return xtime_cache.tv_sec;
+	return xtime.tv_sec;
 }
 EXPORT_SYMBOL(get_seconds);
-
 
 struct timespec current_kernel_time(void)
 {
@@ -734,10 +755,10 @@ struct timespec current_kernel_time(void)
 
 	do {
 		seq = read_atomic_seqbegin(&xtime_lock);
-
-		now = xtime_cache;
+		now = xtime;
 	} while (read_atomic_seqretry(&xtime_lock, seq));
 
 	return now;
 }
 EXPORT_SYMBOL(current_kernel_time);
+

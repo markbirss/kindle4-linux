@@ -251,7 +251,7 @@ early_param("loglevel", loglevel);
 
 /*
  * Unknown boot options get handed to init, unless they look like
- * failed parameters
+ * unused parameters (modprobe will find them in /proc/cmdline).
  */
 static int __init unknown_bootoption(char *param, char *val)
 {
@@ -272,14 +272,9 @@ static int __init unknown_bootoption(char *param, char *val)
 	if (obsolete_checksetup(param))
 		return 0;
 
-	/*
-	 * Preemptive maintenance for "why didn't my misspelled command
-	 * line work?"
-	 */
-	if (strchr(param, '.') && (!val || strchr(param, '.') < val)) {
-		printk(KERN_ERR "Unknown boot option `%s': ignoring\n", param);
+	/* Unused module parameter. */
+	if (strchr(param, '.') && (!val || strchr(param, '.') < val))
 		return 0;
-	}
 
 	if (panic_later)
 		return 0;
@@ -941,7 +936,15 @@ static int __init kernel_init(void * unused)
 	WARN_ON(irqs_disabled());
 #endif
 
-#define DEBUG_COUNT (defined(CONFIG_DEBUG_RT_MUTEXES) + defined(CONFIG_IRQSOFF_TRACER) + defined(CONFIG_PREEMPT_TRACER) + defined(CONFIG_STACK_TRACER) + defined(CONFIG_INTERRUPT_OFF_HIST) + defined(CONFIG_PREEMPT_OFF_HIST) + defined(CONFIG_WAKEUP_LATENCY_HIST) + defined(CONFIG_DEBUG_SLAB) + defined(CONFIG_DEBUG_PAGEALLOC) + defined(CONFIG_LOCKDEP) + (defined(CONFIG_FTRACE) - defined(CONFIG_FTRACE_MCOUNT_RECORD)))
+#define DEBUG_COUNT (defined(CONFIG_DEBUG_RT_MUTEXES) + \
+	defined(CONFIG_IRQSOFF_TRACER) + defined(CONFIG_PREEMPT_TRACER) + \
+	defined(CONFIG_STACK_TRACER) + defined(CONFIG_INTERRUPT_OFF_HIST) + \
+	defined(CONFIG_PREEMPT_OFF_HIST) + \
+	defined(CONFIG_WAKEUP_LATENCY_HIST) + \
+	defined(CONFIG_MISSED_TIMER_OFFSETS_HIST) + \
+	defined(CONFIG_DEBUG_SLAB) + defined(CONFIG_DEBUG_PAGEALLOC) + \
+	defined(CONFIG_LOCKDEP) + \
+	(defined(CONFIG_FTRACE) - defined(CONFIG_FTRACE_MCOUNT_RECORD)))
 
 #if DEBUG_COUNT > 0
 	printk(KERN_ERR "*****************************************************************************\n");
@@ -972,6 +975,9 @@ static int __init kernel_init(void * unused)
 #endif
 #ifdef CONFIG_WAKEUP_LATENCY_HIST
 	printk(KERN_ERR "*        CONFIG_WAKEUP_LATENCY_HIST                                         *\n");
+#endif
+#ifdef CONFIG_MISSED_TIMER_OFFSETS_HIST
+	printk(KERN_ERR "*        CONFIG_MISSED_TIMER_OFFSETS_HIST                                   *\n");
 #endif
 #ifdef CONFIG_DEBUG_SLAB
 	printk(KERN_ERR "*        CONFIG_DEBUG_SLAB                                                  *\n");

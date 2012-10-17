@@ -232,14 +232,12 @@ static struct sigqueue *__sigqueue_do_alloc(struct task_struct *t, gfp_t flags,
 	struct sigqueue *q = NULL;
 	struct user_struct *user;
 
-	/*
-	 * We won't get problems with the target's UID changing under us
-	 * because changing it requires RCU be used, and if t != current, the
-	 * caller must be holding the RCU readlock (by way of a spinlock) and
-	 * we use RCU protection here
-	 */
+	rcu_read_lock();
 	user = get_uid(__task_cred(t)->user);
+	rcu_read_unlock();
+
 	atomic_inc(&user->sigpending);
+
 	if (override_rlimit ||
 	    atomic_read(&user->sigpending) <=
 	    t->signal->rlim[RLIMIT_SIGPENDING].rlim_cur) {
@@ -995,7 +993,7 @@ out_set:
 static int send_signal(int sig, struct siginfo *info, struct task_struct *t,
 			int group)
 {
-	int from_ancestor_ns = 0;
+	int ret, from_ancestor_ns = 0;
 
 #ifdef CONFIG_PID_NS
 	if (!is_si_special(info) && SI_FROMUSER(info) &&
@@ -1020,7 +1018,8 @@ static void print_fatal_signal(struct pt_regs *regs, int signr)
 		for (i = 0; i < 16; i++) {
 			unsigned char insn;
 
-			__get_user(insn, (unsigned char *)(regs->ip + i));
+			if (get_user(insn, (unsigned char *)(regs->ip + i)))
+				break;
 			printk("%02x ", insn);
 		}
 	}
@@ -1226,11 +1225,12 @@ int kill_pid_info_as_uid(int sig, struct siginfo *info, struct pid *pid,
 	int ret = -EINVAL;
 	struct task_struct *p;
 	const struct cred *pcred;
+	unsigned long flags;
 
 	if (!valid_signal(sig))
 		return ret;
 
-	read_lock(&tasklist_lock);
+	rcu_read_lock();
 	p = pid_task(pid, PIDTYPE_PID);
 	if (!p) {
 		ret = -ESRCH;
@@ -1247,14 +1247,16 @@ int kill_pid_info_as_uid(int sig, struct siginfo *info, struct pid *pid,
 	ret = security_task_kill(p, info, sig, secid);
 	if (ret)
 		goto out_unlock;
-	if (sig && p->sighand) {
-		unsigned long flags;
-		spin_lock_irqsave(&p->sighand->siglock, flags);
-		ret = __send_signal(sig, info, p, 1, 0);
-		spin_unlock_irqrestore(&p->sighand->siglock, flags);
+
+	if (sig) {
+		if (lock_task_sighand(p, &flags)) {
+			ret = __send_signal(sig, info, p, 1, 0);
+			unlock_task_sighand(p, &flags);
+		} else
+			ret = -ESRCH;
 	}
 out_unlock:
-	read_unlock(&tasklist_lock);
+	rcu_read_unlock();
 	return ret;
 }
 EXPORT_SYMBOL_GPL(kill_pid_info_as_uid);

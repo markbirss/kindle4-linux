@@ -303,7 +303,7 @@ static void dump_tasks(const struct mem_cgroup *mem)
 			continue;
 		}
 		printk(KERN_INFO "[%5d] %5d %5d %8lu %8lu %3d     %3d %s\n",
-		       p->pid, __task_cred(p)->uid, p->tgid, mm->total_vm,
+		       p->pid, task_uid(p), p->tgid, mm->total_vm,
 		       get_mm_rss(mm), (int)task_cpu(p), p->oomkilladj,
 		       p->comm);
 		task_unlock(p);
@@ -400,7 +400,7 @@ static int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		cpuset_print_task_mems_allowed(current);
 		task_unlock(current);
 		dump_stack();
-		mem_cgroup_print_oom_info(mem, current);
+		mem_cgroup_print_oom_info(mem, p);
 		show_mem();
 		if (sysctl_oom_dump_tasks)
 			dump_tasks(mem);

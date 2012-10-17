@@ -187,7 +187,9 @@ extern struct semaphore kernel_sem;
 
 /*
  * Task state bitmask. NOTE! These bits are also
- * encoded in fs/proc/array.c: get_task_state().
+ * used in fs/proc/array.c: get_task_state() and
+ * in include/trace/events/sched.h in the
+ * sched_switch trace event.
  *
  * We have two separate sets of flags: task->state
  * is about runnability, while task->exit_state are
@@ -195,18 +197,52 @@ extern struct semaphore kernel_sem;
  * modifying one set can't modify the other one by
  * mistake.
  */
+
 #define TASK_RUNNING		0
+#define TASK_STATE_0		"R"
+#define DESCR_TASK_STATE_0	"running"
+
 #define TASK_RUNNING_MUTEX	1
+#define TASK_STATE_1		"M"
+#define DESCR_TASK_STATE_1	"running-mutex"
+
 #define TASK_INTERRUPTIBLE	2
+#define TASK_STATE_2		"S"
+#define DESCR_TASK_STATE_2	"sleeping"
+
 #define TASK_UNINTERRUPTIBLE	4
+#define TASK_STATE_4		"D"
+#define DESCR_TASK_STATE_4	"disk sleep"
+
 #define __TASK_STOPPED		8
+#define TASK_STATE_8		"T"
+#define DESCR_TASK_STATE_8	"stopped"
+
 #define __TASK_TRACED		16
+#define TASK_STATE_16		"t"
+#define DESCR_TASK_STATE_16	"tracing stop"
+
 /* in tsk->exit_state */
 #define EXIT_ZOMBIE		32
+#define TASK_STATE_32		"Z"
+#define DESCR_TASK_STATE_32	"zombie"
+
 #define EXIT_DEAD		64
+#define TASK_STATE_64		"X"
+#define DESCR_TASK_STATE_64	"dead"
+
 /* in tsk->state again */
 #define TASK_DEAD		128
+#define TASK_STATE_128		"x"
+#define DESCR_TASK_STATE_128	"dead"
+
 #define TASK_WAKEKILL		256
+#define TASK_STATE_256		"W"
+#define DESCR_TASK_STATE_256	"wakekill"
+
+#define TASK_STATE_TO_CHAR_STR \
+  TASK_STATE_0 TASK_STATE_1 TASK_STATE_2 TASK_STATE_4 TASK_STATE_8 \
+  TASK_STATE_16 TASK_STATE_32 TASK_STATE_64 TASK_STATE_128 TASK_STATE_256
 
 /* Convenience macros for the sake of set_task_state */
 #define TASK_KILLABLE		(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
@@ -843,18 +879,19 @@ enum cpu_idle_type {
 #define SCHED_LOAD_SCALE_FUZZ	SCHED_LOAD_SCALE
 
 #ifdef CONFIG_SMP
-#define SD_LOAD_BALANCE		1	/* Do load balancing on this domain. */
-#define SD_BALANCE_NEWIDLE	2	/* Balance when about to become idle */
-#define SD_BALANCE_EXEC		4	/* Balance on exec */
-#define SD_BALANCE_FORK		8	/* Balance on fork, clone */
-#define SD_WAKE_IDLE		16	/* Wake to idle CPU on task wakeup */
-#define SD_WAKE_AFFINE		32	/* Wake task to waking CPU */
-#define SD_WAKE_BALANCE		64	/* Perform balancing at task wakeup */
-#define SD_SHARE_CPUPOWER	128	/* Domain members share cpu power */
-#define SD_POWERSAVINGS_BALANCE	256	/* Balance for power savings */
-#define SD_SHARE_PKG_RESOURCES	512	/* Domain members share cpu pkg resources */
-#define SD_SERIALIZE		1024	/* Only a single load balancing instance */
-#define SD_WAKE_IDLE_FAR	2048	/* Gain latency sacrificing cache hit */
+#define SD_LOAD_BALANCE		0x0001	/* Do load balancing on this domain. */
+#define SD_BALANCE_NEWIDLE	0x0002	/* Balance when about to become idle */
+#define SD_BALANCE_EXEC		0x0004	/* Balance on exec */
+#define SD_BALANCE_FORK		0x0008	/* Balance on fork, clone */
+#define SD_WAKE_IDLE		0x0010	/* Wake to idle CPU on task wakeup */
+#define SD_WAKE_AFFINE		0x0020	/* Wake task to waking CPU */
+#define SD_WAKE_BALANCE		0x0040	/* Perform balancing at task wakeup */
+#define SD_SHARE_CPUPOWER	0x0080	/* Domain members share cpu power */
+#define SD_POWERSAVINGS_BALANCE	0x0100	/* Balance for power savings */
+#define SD_SHARE_PKG_RESOURCES	0x0200	/* Domain members share cpu pkg resources */
+#define SD_SERIALIZE		0x0400	/* Only a single load balancing instance */
+#define SD_WAKE_IDLE_FAR	0x0800	/* Gain latency sacrificing cache hit */
+#define SD_PREFER_SIBLING	0x1000	/* Prefer to place tasks in a sibling domain */
 
 enum powersavings_balance_level {
 	POWERSAVINGS_BALANCE_NONE = 0,  /* No power saving load balance */
@@ -874,7 +911,7 @@ static inline int sd_balance_for_mc_power(void)
 	if (sched_smt_power_savings)
 		return SD_POWERSAVINGS_BALANCE;
 
-	return 0;
+	return SD_PREFER_SIBLING;
 }
 
 static inline int sd_balance_for_package_power(void)
@@ -882,7 +919,7 @@ static inline int sd_balance_for_package_power(void)
 	if (sched_mc_power_savings | sched_smt_power_savings)
 		return SD_POWERSAVINGS_BALANCE;
 
-	return 0;
+	return SD_PREFER_SIBLING;
 }
 
 /*
@@ -904,15 +941,9 @@ struct sched_group {
 
 	/*
 	 * CPU power of this group, SCHED_LOAD_SCALE being max power for a
-	 * single CPU. This is read only (except for setup, hotplug CPU).
-	 * Note : Never change cpu_power without recompute its reciprocal
+	 * single CPU.
 	 */
-	unsigned int __cpu_power;
-	/*
-	 * reciprocal value of cpu_power to avoid expensive divides
-	 * (see include/linux/reciprocal_div.h)
-	 */
-	u32 reciprocal_cpu_power;
+	unsigned int cpu_power;
 
 	/*
 	 * The CPUs this group covers.
@@ -965,6 +996,7 @@ struct sched_domain {
 	unsigned int newidle_idx;
 	unsigned int wake_idx;
 	unsigned int forkexec_idx;
+	unsigned int smt_gain;
 	int flags;			/* See SD_* */
 	enum sched_domain_level level;
 
@@ -1051,6 +1083,10 @@ partition_sched_domains(int ndoms_new, struct cpumask *doms_new,
 }
 #endif	/* !CONFIG_SMP */
 
+struct sched_domain;
+unsigned long default_scale_freq_power(struct sched_domain *sd, int cpu);
+unsigned long default_scale_smt_power(struct sched_domain *sd, int cpu);
+
 struct io_context;			/* See blkdev.h */
 
 
@@ -1071,7 +1107,8 @@ struct sched_domain;
 struct sched_class {
 	const struct sched_class *next;
 
-	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int wakeup);
+	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int wakeup,
+			      bool head);
 	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int sleep);
 	void (*yield_task) (struct rq *rq);
 
@@ -1492,7 +1529,6 @@ struct task_struct {
 #endif
 	struct list_head pi_state_list;
 	struct futex_pi_state *pi_state_cache;
-	struct task_struct *futex_wakeup;
 #endif
 #ifdef CONFIG_PERF_COUNTERS
 	struct perf_counter_context *perf_counter_ctxp;
@@ -1549,6 +1585,9 @@ struct task_struct {
 	unsigned long trace;
 	/* bitmask of trace recursion */
 	unsigned long trace_recursion;
+#ifdef CONFIG_WAKEUP_LATENCY_HIST
+	u64 preempt_timestamp_hist;
+#endif
 #endif /* CONFIG_TRACING */
 #ifdef CONFIG_PREEMPT_RT
 	/*
@@ -1914,6 +1953,7 @@ extern unsigned int sysctl_sched_child_runs_first;
 extern unsigned int sysctl_sched_features;
 extern unsigned int sysctl_sched_migration_cost;
 extern unsigned int sysctl_sched_nr_migrate;
+extern unsigned int sysctl_sched_time_avg;
 extern unsigned int sysctl_timer_migration;
 
 int sched_nr_latency_handler(struct ctl_table *table, int write,
@@ -2105,11 +2145,18 @@ static inline int is_si_special(const struct siginfo *info)
 	return info <= SEND_SIG_FORCED;
 }
 
-/* True if we are on the alternate signal stack.  */
-
+/*
+ * True if we are on the alternate signal stack.
+ */
 static inline int on_sig_stack(unsigned long sp)
 {
-	return (sp - current->sas_ss_sp < current->sas_ss_size);
+#ifdef CONFIG_STACK_GROWSUP
+	return sp >= current->sas_ss_sp &&
+		sp - current->sas_ss_sp < current->sas_ss_size;
+#else
+	return sp > current->sas_ss_sp &&
+		sp - current->sas_ss_sp <= current->sas_ss_size;
+#endif
 }
 
 static inline int sas_ss_flags(unsigned long sp)
@@ -2597,8 +2644,6 @@ static inline void mm_init_owner(struct mm_struct *mm, struct task_struct *p)
 {
 }
 #endif /* CONFIG_MM_OWNER */
-
-#define TASK_STATE_TO_CHAR_STR "RMSDTtZX"
 
 #ifdef CONFIG_SMP
 static inline int task_is_current(struct task_struct *task)
