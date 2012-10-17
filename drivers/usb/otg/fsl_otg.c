@@ -678,6 +678,7 @@ static int fsl_otg_start_hnp(struct otg_transceiver *otg_p)
 /* Interrupt handler for gpio id pin */
 irqreturn_t fsl_otg_isr_gpio(int irq, void *dev_id)
 {
+	int value;
 	struct otg_fsm *fsm;
 	struct fsl_usb2_platform_data *pdata =
 		(struct fsl_usb2_platform_data *)dev_id;
@@ -685,7 +686,6 @@ irqreturn_t fsl_otg_isr_gpio(int irq, void *dev_id)
 	struct otg_transceiver *otg_trans = otg_get_transceiver();
 	p_otg = container_of(otg_trans, struct fsl_otg, otg);
 	fsm = &p_otg->fsm;
-	int value;
 
 	if (pdata->id_gpio == 0)
 		return IRQ_NONE;
@@ -863,6 +863,8 @@ static int fsl_otg_conf(struct platform_device *pdev)
 	return 0;
 }
 
+extern int otg_set_resources(struct resource *resources);
+
 /* OTG Initialization*/
 int usb_otg_start(struct platform_device *pdev)
 {
@@ -915,6 +917,8 @@ int usb_otg_start(struct platform_device *pdev)
 
 	if (pdata->platform_init && pdata->platform_init(pdev) != 0)
 		return -EINVAL;
+
+	otg_set_resources(pdev->resource);
 
 	/* stop the controller */
 	temp = readl(&p_otg->dr_mem_map->usbcmd);

@@ -554,9 +554,10 @@ static struct mxs_mmc_platform_data mmc0_data = {
 	.get_wp		= mxs_mmc_get_wp_ssp0,
 	.cmd_pullup	= mxs_mmc_cmd_pullup_ssp0,
 	.setclock	= mxs_mmc_setclock_ssp0,
-	.caps 		= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA,
+	.caps 		= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA
+				| MMC_CAP_DATA_DDR,
 	.min_clk	= 400000,
-	.max_clk	= 52000000,
+	.max_clk	= 48000000,
 	.read_uA        = 50000,
 	.write_uA       = 70000,
 	.clock_mmc = "ssp.0",
@@ -592,9 +593,10 @@ static struct mxs_mmc_platform_data mmc1_data = {
 	.get_wp		= mxs_mmc_get_wp_ssp1,
 	.cmd_pullup	= mxs_mmc_cmd_pullup_ssp1,
 	.setclock	= mxs_mmc_setclock_ssp1,
-	.caps 		= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA,
+	.caps 		= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA
+				| MMC_CAP_DATA_DDR,
 	.min_clk	= 400000,
-	.max_clk	= 52000000,
+	.max_clk	= 48000000,
 	.read_uA        = 50000,
 	.write_uA       = 70000,
 	.clock_mmc = "ssp.1",
@@ -980,6 +982,87 @@ static void __init mx28_init_ts(void)
 	;
 }
 #endif
+#if defined(CONFIG_BATTERY_MXS)
+/* battery info data */
+static ddi_bc_Cfg_t battery_data = {
+	.u32StateMachinePeriod		 = 100,		/* ms */
+	.u16CurrentRampSlope		 = 75,		/* mA/s */
+	.u16ConditioningThresholdVoltage = 2900, 	/* mV */
+	.u16ConditioningMaxVoltage	 = 3000,	/* mV */
+	.u16ConditioningCurrent		 = 160,		/* mA */
+	.u32ConditioningTimeout		 = 4*60*60*1000, /* ms (4 hours) */
+	.u16ChargingVoltage		 = 4200,	/* mV */
+	/* FIXME: the current comparator could have h/w bugs in current
+	 * detection through POWER_STS.CHRGSTS bit */
+	.u16ChargingCurrent		 = 600,		/* mA 600 */
+	.u16ChargingThresholdCurrent	 = 60,		/* mA 60 */
+	.u32ChargingTimeout		 = 4*60*60*1000,/* ms (4 hours) */
+	.u32TopOffPeriod		 = 30*60*1000,	/* ms (30 minutes) */
+	.monitorDieTemp			 = 1,		/* Monitor the die */
+	.u8DieTempHigh			 = 75,		/* deg centigrade */
+	.u8DieTempLow			 = 65,		/* deg centigrade */
+	.u16DieTempSafeCurrent		 = 0,		/* mA */
+	.monitorBatteryTemp		 = 0,		/* Monitor the battery*/
+	.u8BatteryTempChannel		 = 0,		/* LRADC 0 */
+	.u16BatteryTempHigh		 = 642,		/* Unknown units */
+	.u16BatteryTempLow		 = 497,		/* Unknown units */
+	.u16BatteryTempSafeCurrent	 = 0,		/* mA */
+};
+
+static struct resource battery_resource[] = {
+	{/* 0 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_VDD5V,
+		.end    = IRQ_VDD5V,
+	},
+	{/* 1 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_DCDC4P2_BRNOUT,
+		.end    = IRQ_DCDC4P2_BRNOUT,
+	},
+	{/* 2 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_BATT_BRNOUT,
+		.end    = IRQ_BATT_BRNOUT,
+	},
+	{/* 3 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_VDDD_BRNOUT,
+		.end    = IRQ_VDDD_BRNOUT,
+	},
+	{/* 4 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_VDDA_BRNOUT,
+		.end    = IRQ_VDDA_BRNOUT,
+	},
+	{/* 5 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_VDDIO_BRNOUT,
+		.end    = IRQ_VDDIO_BRNOUT,
+	},
+	{/* 6 */
+		.flags  = IORESOURCE_IRQ,
+		.start  = IRQ_VDD5V_DROOP,
+		.end    = IRQ_VDD5V_DROOP,
+	},
+};
+
+static void mx28_init_battery(void)
+{
+	struct platform_device *pdev;
+	pdev = mxs_get_device("mxs-battery", 0);
+	if (pdev) {
+		pdev->resource = battery_resource,
+		pdev->num_resources = ARRAY_SIZE(battery_resource),
+		pdev->dev.platform_data = &battery_data;
+		mxs_add_device(pdev, 3);
+	}
+}
+#else
+static void mx28_init_battery(void)
+{
+}
+#endif
 
 #if defined(CONFIG_CAN_FLEXCAN) || defined(CONFIG_CAN_FLEXCAN_MODULE)
 static void flexcan_xcvr_enable(int id, int en)
@@ -1073,124 +1156,6 @@ static inline void mx28_init_flexcan(void)
 #else
 static inline void mx28_init_flexcan(void)
 {
-}
-#endif
-#if defined(CONFIG_BATTERY_MXS)
-/* battery info data */
-static ddi_bc_Cfg_t battery_data = {
-	.u32StateMachinePeriod		 = 100,		/* ms */
-	.u16CurrentRampSlope		 = 75,		/* mA/s */
-	.u16ConditioningThresholdVoltage = 2900, 	/* mV */
-	.u16ConditioningMaxVoltage	 = 3000,	/* mV */
-	.u16ConditioningCurrent		 = 160,		/* mA */
-	.u32ConditioningTimeout		 = 4*60*60*1000, /* ms (4 hours) */
-	.u16ChargingVoltage		 = 4200,	/* mV */
-	/* FIXME: the current comparator could have h/w bugs in current
-	 * detection through POWER_STS.CHRGSTS bit */
-	.u16ChargingCurrent		 = 600,		/* mA 600 */
-	.u16ChargingThresholdCurrent	 = 60,		/* mA 60 */
-	.u32ChargingTimeout		 = 4*60*60*1000,/* ms (4 hours) */
-	.u32TopOffPeriod		 = 30*60*1000,	/* ms (30 minutes) */
-	.monitorDieTemp			 = 1,		/* Monitor the die */
-	.u8DieTempHigh			 = 75,		/* deg centigrade */
-	.u8DieTempLow			 = 65,		/* deg centigrade */
-	.u16DieTempSafeCurrent		 = 0,		/* mA */
-	.monitorBatteryTemp		 = 0,		/* Monitor the battery*/
-	.u8BatteryTempChannel		 = 0,		/* LRADC 0 */
-	.u16BatteryTempHigh		 = 642,		/* Unknown units */
-	.u16BatteryTempLow		 = 497,		/* Unknown units */
-	.u16BatteryTempSafeCurrent	 = 0,		/* mA */
-};
-
-static struct resource battery_resource[] = {
-	{/* 0 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_VDD5V,
-		.end    = IRQ_VDD5V,
-	},
-	{/* 1 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_DCDC4P2_BRNOUT,
-		.end    = IRQ_DCDC4P2_BRNOUT,
-	},
-	{/* 2 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_BATT_BRNOUT,
-		.end    = IRQ_BATT_BRNOUT,
-	},
-	{/* 3 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_VDDD_BRNOUT,
-		.end    = IRQ_VDDD_BRNOUT,
-	},
-	{/* 4 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_VDDA_BRNOUT,
-		.end    = IRQ_VDDA_BRNOUT,
-	},
-	{/* 5 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_VDDIO_BRNOUT,
-		.end    = IRQ_VDDIO_BRNOUT,
-	},
-	{/* 6 */
-		.flags  = IORESOURCE_IRQ,
-		.start  = IRQ_VDD5V_DROOP,
-		.end    = IRQ_VDD5V_DROOP,
-	},
-};
-
-static void mx28_init_battery(void)
-{
-	struct platform_device *pdev;
-	pdev = mxs_get_device("mxs-battery", 0);
-	if (pdev) {
-		pdev->resource = battery_resource,
-		pdev->num_resources = ARRAY_SIZE(battery_resource),
-		pdev->dev.platform_data = &battery_data;
-		mxs_add_device(pdev, 3);
-	}
-}
-#else
-static void mx28_init_battery(void)
-{
-}
-#endif
-
-#if defined(CONFIG_CRYPTO_DEV_DCP)
-
-static struct resource dcp_resources[] = {
-
-	{
-		.flags = IORESOURCE_MEM,
-		.start = DCP_PHYS_ADDR,
-		.end   = DCP_PHYS_ADDR + 0x2000 - 1,
-	}, {
-		.flags = IORESOURCE_IRQ,
-		.start = IRQ_DCP_VMI,
-		.end = IRQ_DCP_VMI,
-	}, {
-		.flags = IORESOURCE_IRQ,
-		.start = IRQ_DCP,
-		.end = IRQ_DCP,
-	},
-};
-
-static void __init mx28_init_dcp(void)
-{
-	struct platform_device *pdev;
-
-	pdev = mxs_get_device("dcp", 0);
-	if (pdev == NULL || IS_ERR(pdev))
-		return;
-	pdev->resource = dcp_resources;
-	pdev->num_resources = ARRAY_SIZE(dcp_resources);
-	mxs_add_device(pdev, 3);
-}
-#else
-static void __init mx28_init_dcp(void)
-{
-	;
 }
 #endif
 
@@ -1432,10 +1397,6 @@ int __init mx28_device_init(void)
 	mx28_init_audio();
 	mx28_init_spdif();
 	mx28_init_lcdif();
-	mx28_init_pxp();
-	mx28_init_dcp();
-	mx28_init_battery();
-	mx28_init_persistent();
 	return 0;
 }
 

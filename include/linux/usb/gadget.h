@@ -486,6 +486,7 @@ struct usb_gadget {
 	unsigned			a_alt_hnp_support:1;
 	const char			*name;
 	struct device			dev;
+	int				configured;
 };
 
 static inline void set_gadget_data(struct usb_gadget *gadget, void *data)

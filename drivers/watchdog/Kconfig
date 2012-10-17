@@ -215,6 +215,10 @@ config MXC_WATCHDOG
 	  To compile this driver as a module, choose M here: the
 	  module will be called mxc_wdt.
 
+config MXC_WDOG_PRINTK_BUF
+	bool "MXC watchdog saved printk buffer"
+	depends on MXC_WATCHDOG
+
 config STMP3XXX_WATCHDOG
 	tristate "Sigmatel STMP3XXX watchdog"
 	depends on ARCH_STMP3XXX

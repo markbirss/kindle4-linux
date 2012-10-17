@@ -19,6 +19,7 @@
  * @ingroup MSL_MX51
  */
 
+#include <linux/proc_fs.h>
 #include <linux/types.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -28,6 +29,7 @@
 #include <linux/clk.h>
 #include <mach/common.h>
 #include <mach/hardware.h>
+#include <asm/mach/map.h>
 
 #define CORTEXA8_PLAT_AMC	0x18
 #define SRPG_NEON_PUPSCR	0x284
@@ -41,7 +43,9 @@
 
 void __iomem *arm_plat_base;
 void __iomem *gpc_base;
+void __iomem *ccm_base;
 
+extern void init_ddr_settings(void);
 struct cpu_wp *(*get_cpu_wp)(int *wp);
 void (*set_num_cpu_wp)(int num);
 
@@ -129,6 +133,8 @@ static int __init post_cpu_init(void)
 	}
 
 	gpc_base = ioremap(MX53_BASE_ADDR(GPC_BASE_ADDR), SZ_4K);
+	ccm_base = ioremap(MX53_BASE_ADDR(CCM_BASE_ADDR), SZ_4K);
+
 	clk_enable(gpcclk);
 
 	/* Setup the number of clock cycles to wait for SRPG
@@ -180,6 +186,9 @@ static int __init post_cpu_init(void)
 		__raw_writel(reg, base + 0x8c);
 		iounmap(base);
 	}
+
+	if (cpu_is_mx50())
+		init_ddr_settings();
 
 	return 0;
 }

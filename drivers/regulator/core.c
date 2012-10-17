@@ -65,6 +65,7 @@ static int _regulator_get_current_limit(struct regulator_dev *rdev);
 static unsigned int _regulator_get_mode(struct regulator_dev *rdev);
 static void _notifier_call_chain(struct regulator_dev *rdev,
 				  unsigned long event, void *data);
+int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV);
 
 /* gets the regulator for a given consumer device */
 static struct regulator *get_device_regulator(struct device *dev)
@@ -210,12 +211,34 @@ static ssize_t regulator_uV_show(struct device *dev,
 	ssize_t ret;
 
 	mutex_lock(&rdev->mutex);
+	rdev->desc->ops->enable(rdev);
 	ret = sprintf(buf, "%d\n", _regulator_get_voltage(rdev));
+	rdev->desc->ops->disable(rdev);
 	mutex_unlock(&rdev->mutex);
 
 	return ret;
 }
-static DEVICE_ATTR(microvolts, 0444, regulator_uV_show, NULL);
+
+static ssize_t regulator_uV_store(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	struct regulator_dev *rdev = dev_get_drvdata(dev);
+	int value;
+	int reg_val = 0;
+
+	if (sscanf(buf, "%d", &value) > 0) {
+		reg_val = value * 1000;
+		mutex_lock(&rdev->mutex);
+		rdev->desc->ops->enable(rdev);
+		rdev->desc->ops->set_voltage(rdev, reg_val, reg_val);
+		rdev->desc->ops->disable(rdev);
+		mutex_unlock(&rdev->mutex);
+		return strlen(buf);
+	}
+
+	return -EINVAL;
+}
+static DEVICE_ATTR(microvolts, 0666, regulator_uV_show, regulator_uV_store);
 
 static ssize_t regulator_uA_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
@@ -664,7 +687,7 @@ static void print_constraints(struct regulator_dev *rdev)
 	if (constraints->valid_modes_mask & REGULATOR_MODE_STANDBY)
 		count += sprintf(buf + count, "standby");
 
-	printk(KERN_INFO "regulator: %s: %s\n", rdev->desc->name, buf);
+	printk(KERN_DEBUG "regulator: %s: %s\n", rdev->desc->name, buf);
 }
 
 /**
@@ -2277,7 +2300,7 @@ EXPORT_SYMBOL_GPL(regulator_get_init_drvdata);
 
 static int __init regulator_init(void)
 {
-	printk(KERN_INFO "regulator: core version %s\n", REGULATOR_VERSION);
+	printk(KERN_DEBUG "regulator: core version %s\n", REGULATOR_VERSION);
 	return class_register(&regulator_class);
 }
 
@@ -2329,7 +2352,7 @@ static int __init regulator_init_complete(void)
 		if (has_full_constraints) {
 			/* We log since this may kill the system if it
 			 * goes wrong. */
-			printk(KERN_INFO "%s: disabling %s\n",
+			printk(KERN_DEBUG "%s: disabling %s\n",
 			       __func__, name);
 			ret = ops->disable(rdev);
 			if (ret != 0) {

@@ -21,13 +21,14 @@
 
 #include <linux/platform_device.h>
 #include <linux/fsl_devices.h>
+#include <linux/sysfs.h>
 #include <linux/usb/otg.h>
 
 #include "ehci-fsl.h"
 #include <mach/fsl_usb.h>
+#include <mach/boardid.h>
 
 #undef EHCI_PROC_PTC
-#ifdef EHCI_PROC_PTC		/* /proc PORTSC:PTC support */
 /*
  * write a PORTSC:PTC value to /proc/driver/ehci-ptc
  * to put the controller into test mode.
@@ -35,6 +36,69 @@
 #include <linux/proc_fs.h>
 #include <asm/uaccess.h>
 #define EFPSL 3			/* ehci fsl proc string length */
+
+#define EHCI_IDLE_SUSPEND_THRESHOLD	60000   /* Restart the idle thread 60 secs after resume */
+#define EHCI_ARC_TOGGLE_LPM		40000   /* Toggle the wakeup after 40 seconds */
+extern void ehci_hcd_recalc_work(void);
+int wakeup_value = 0;
+
+static ssize_t
+deep_idle_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", deep_idle_enable_value);
+}
+
+static ssize_t
+deep_idle_enable_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	if (strstr(buf, "1") != NULL && wakeup_value == 1) {
+		deep_idle_enable_value = 1;
+
+		ehci_hcd_recalc_work();
+		ehci_hcd_restart_idle();
+	}
+	else {
+		ehci_hcd_recalc_work();
+		deep_idle_enable_value = 0;
+	}
+	return size;
+}
+static DEVICE_ATTR(deep_idle_enable, 0644, deep_idle_enable_show, deep_idle_enable_store);
+
+static ssize_t
+wakeup_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", wakeup_value);
+}
+
+static ssize_t
+wakeup_enable_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	if (strstr(buf, "1") != NULL) {
+		wakeup_value = 1;
+		wan_set_usb_wake_callback(ehci_hcd_recalc_work);
+		ehci_hcd_restart_idle();
+	}
+	else {
+		ehci_hcd_recalc_work();
+		deep_idle_enable_value = 0;
+		wakeup_value = 0;
+	}
+
+	return size;
+}
+static DEVICE_ATTR(wakeup_enable, 0644, wakeup_enable_show, wakeup_enable_store);
+
+static ssize_t suspend_counter_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	return sprintf(buf, "%d\n", suspend_count);
+}
+static DEVICE_ATTR(suspend_counter, 0644, suspend_counter_show, NULL);
+
+#ifdef EHCI_PROC_PTC            /* /proc PORTSC:PTC support */
 
 static int ehci_fsl_proc_read(char *page, char **start, off_t off, int count,
 			      int *eof, void *data)
@@ -110,8 +174,15 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 	struct resource *res;
 	int irq;
 	int retval;
+	struct device *ehci_arc_dev;
 
 	pr_debug("initializing FSL-SOC USB Controller\n");
+
+	if (mx50_board_is(BOARD_ID_TEQUILA)) {
+               dev_err(&pdev->dev,
+                       "Tequila board don't have WAN modem\n");
+               return -ENODEV;
+       }
 
 	/* Need platform data for setup */
 	pdata = (struct fsl_usb2_platform_data *)pdev->dev.platform_data;
@@ -215,6 +286,17 @@ int usb_hcd_fsl_probe(const struct hc_driver *driver,
 
 	fsl_platform_set_ahb_burst(hcd);
 	ehci_testmode_init(hcd_to_ehci(hcd));
+
+	ehci_arc_dev = &pdev->dev;
+	if (device_create_file(ehci_arc_dev, &dev_attr_wakeup_enable) < 0)
+		dev_err(&pdev->dev, "ehci: could not create wakeup_value sysfs entry\n");
+
+	if (device_create_file(ehci_arc_dev, &dev_attr_suspend_counter) < 0)
+		dev_err(&pdev->dev, "ehci: could not create suspend_counter sysfs entry\n");
+
+	if (device_create_file(ehci_arc_dev, &dev_attr_deep_idle_enable) < 0)
+		dev_err(&pdev->dev, "ehci: could not create deep_idle_enable_value sysfs entry\n");
+
 	return retval;
 
 err4:
@@ -248,6 +330,7 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 	u32 tmp;
+	static struct device *ehci_arc_dev;
 
 	if (!test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)) {
 		/* Need open clock for register access */
@@ -277,6 +360,11 @@ static void usb_hcd_fsl_remove(struct usb_hcd *hcd,
 
 	usb_remove_hcd(hcd);
 	usb_put_hcd(hcd);
+
+	ehci_arc_dev = &pdev->dev;
+	device_remove_file(ehci_arc_dev, &dev_attr_wakeup_enable);
+	device_remove_file(ehci_arc_dev, &dev_attr_suspend_counter);
+	device_remove_file(ehci_arc_dev, &dev_attr_deep_idle_enable);
 
 	/*
 	 * do platform specific un-initialization:
@@ -359,6 +447,22 @@ static int ehci_fsl_setup(struct usb_hcd *hcd)
 	return retval;
 }
 
+/* USB EHCI bus suspend */
+static int ehci_arc_bus_suspend(struct usb_hcd *hcd)
+{
+	if (!wakeup_value) {
+		ehci_bus_suspend(hcd);
+	}
+
+	return 0;
+}
+
+static int ehci_arc_bus_resume(struct usb_hcd *hcd)
+{
+	ehci_bus_resume(hcd);
+	return 0;
+}
+
 static const struct hc_driver ehci_fsl_hc_driver = {
 	.description = hcd_name,
 	.product_desc = "Freescale On-Chip EHCI Host Controller",
@@ -396,8 +500,8 @@ static const struct hc_driver ehci_fsl_hc_driver = {
 	 */
 	.hub_status_data = ehci_hub_status_data,
 	.hub_control = ehci_hub_control,
-	.bus_suspend = ehci_bus_suspend,
-	.bus_resume = ehci_bus_resume,
+	.bus_suspend = ehci_arc_bus_suspend,
+	.bus_resume = ehci_arc_bus_resume,
 	.start_port_reset = ehci_start_port_reset,
 	.relinquish_port = ehci_relinquish_port,
 	.port_handed_over = ehci_port_handed_over,
@@ -413,6 +517,9 @@ static int ehci_fsl_drv_probe(struct platform_device *pdev)
 	/* FIXME we only want one one probe() not two */
 	return usb_hcd_fsl_probe(&ehci_fsl_hc_driver, pdev);
 }
+
+static void ehci_lpm_toggle(struct work_struct *unused);
+static DECLARE_DELAYED_WORK(toggle_idle_lp, ehci_lpm_toggle);
 
 static int ehci_fsl_drv_remove(struct platform_device *pdev)
 {
@@ -441,6 +548,7 @@ static int ehci_fsl_drv_suspend(struct platform_device *pdev,
 	u32 tmp, port_status;
 	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 
+	ehci_hcd_recalc_work();
 	if (device_may_wakeup(&(pdev->dev))) {
 		/* Need open clock for register access */
 		if (pdata->usb_clock_for_pm)

@@ -14,6 +14,7 @@
 #define __ARCH_ARM_MACH_MX51_CRM_REGS_H__
 
 #define MXC_CCM_BASE	(IO_ADDRESS(CCM_BASE_ADDR))
+#define MXC_SRC_BASE	(IO_ADDRESS(SRC_BASE_ADDR))
 
 /* PLL Register Offsets */
 #define MXC_PLL_DP_CTL			0x00
@@ -70,6 +71,56 @@
 #define MXC_PLL_DP_DESTAT_TOG_SEL	(1 << 31)
 #define MXC_PLL_DP_DESTAT_MFN		0x07FFFFFF
 
+/* Register addresses of apll and pfd*/
+#define MXC_ANADIG_FRAC0		0x10
+#define MXC_ANADIG_FRAC0_SET		0x14
+#define MXC_ANADIG_FRAC0_CLR		0x18
+#define MXC_ANADIG_FRAC1		0x20
+#define MXC_ANADIG_FRAC1_SET		0x24
+#define MXC_ANADIG_FRAC1_CLR		0x28
+#define MXC_ANADIG_MISC			0x60
+#define MXC_ANADIG_MISC_SET		0x64
+#define MXC_ANADIG_MISC_CLR		0x68
+#define MXC_ANADIG_PLLCTRL		0x70
+#define MXC_ANADIG_PLLCTRL_SET		0x74
+#define MXC_ANADIG_PLLCTRL_CLR		0x78
+
+/* apll and pfd Register Bit definitions */
+
+#define MXC_ANADIG_PFD3_CLKGATE		(1 << 31)
+#define MXC_ANADIG_PFD3_STABLE		(1 << 30)
+#define MXC_ANADIG_PFD3_FRAC_OFFSET	24
+#define MXC_ANADIG_PFD_FRAC_MASK	0x3F
+#define MXC_ANADIG_PFD2_CLKGATE		(1 << 23)
+#define MXC_ANADIG_PFD2_STABLE		(1 << 22)
+#define MXC_ANADIG_PFD2_FRAC_OFFSET	16
+#define MXC_ANADIG_PFD1_CLKGATE		(1 << 15)
+#define MXC_ANADIG_PFD1_STABLE		(1 << 14)
+#define MXC_ANADIG_PFD1_FRAC_OFFSET	8
+#define MXC_ANADIG_PFD0_CLKGATE		(1 << 7)
+#define MXC_ANADIG_PFD0_STABLE		(1 << 6)
+#define MXC_ANADIG_PFD0_FRAC_OFFSET	0
+
+#define MXC_ANADIG_PFD7_CLKGATE		(1 << 31)
+#define MXC_ANADIG_PFD7_STABLE		(1 << 30)
+#define MXC_ANADIG_PFD7_FRAC_OFFSET	24
+#define MXC_ANADIG_PFD6_CLKGATE		(1 << 23)
+#define MXC_ANADIG_PFD6_STABLE		(1 << 22)
+#define MXC_ANADIG_PFD6_FRAC_OFFSET	16
+#define MXC_ANADIG_PFD5_CLKGATE		(1 << 15)
+#define MXC_ANADIG_PFD5_STABLE		(1 << 14)
+#define MXC_ANADIG_PFD5_FRAC_OFFSET	8
+#define MXC_ANADIG_PFD4_CLKGATE		(1 << 7)
+#define MXC_ANADIG_PFD4_STABLE		(1 << 6)
+#define MXC_ANADIG_PFD4_FRAC_OFFSET	0
+
+#define MXC_ANADIG_APLL_LOCK		(1 << 31)
+#define MXC_ANADIG_APLL_FORCE_LOCK	(1 << 30)
+#define MXC_ANADIG_PFD_DIS_OFFSET	16
+#define MXC_ANADIG_PFD_DIS_MASK		0xff
+#define MXC_ANADIG_APLL_LOCK_CNT_OFFSET	0
+#define MXC_ANADIG_APLL_LOCK_CNT_MASK	0xffff
+
 /* Register addresses of CCM*/
 #define MXC_CCM_CCR		(MXC_CCM_BASE + 0x00)
 #define MXC_CCM_CCDR		(MXC_CCM_BASE + 0x04)
@@ -117,6 +168,11 @@
 #define MXC_CCM_GPMI		(MXC_CCM_BASE + 0xAC)
 #define MXC_CCM_BCH		(MXC_CCM_BASE + 0xB0)
 #define MXC_CCM_MSHC_XMSCKI	(MXC_CCM_BASE + 0xB4)
+
+/* CCM Register Offsets. */
+#define MXC_CCM_CDCR_OFFSET		0x4C
+#define MXC_CCM_CACRR_OFFSET		0x10
+#define MXC_CCM_CDHIPR_OFFSET	0x48
 
 /* Define the bits in register CCR */
 #define MXC_CCM_CCR_COSC_EN		(1 << 12)
@@ -179,7 +235,9 @@
 #define MXC_CCM_CBCDR_DDR_HF_SEL_OFFSET		(30)
 #define MXC_CCM_CBCDR_DDR_HF_SEL			(0x1 << 30)
 #define MXC_CCM_CBCDR_DDR_PODF_OFFSET		(27)
-#define MXC_CCM_CBCDR_DDR_PODF_MASK			(0x7 << 27)
+#define MXC_CCM_CBCDR_DDR_PODF_MASK            (0x7 << 27)
+#define MX50_CCM_CBCDR_WEIM_PODF_OFFSET        (22)
+#define MX50_CCM_CBCDR_WEIM_PODF_MASK          (0x7 << 22)
 #define MXC_CCM_CBCDR_EMI_PODF_OFFSET		(22)
 #define MXC_CCM_CBCDR_EMI_PODF_MASK			(0x7 << 22)
 #define MXC_CCM_CBCDR_AXI_B_PODF_OFFSET		(19)
@@ -239,6 +297,8 @@
 #define MX50_CCM_CSCMR1_ESDHC1_CLK_SEL_MASK	(0x3 << 21)
 #define MX50_CCM_CSCMR1_ESDHC2_CLK_SEL			(0x1 << 20)
 #define MX50_CCM_CSCMR1_ESDHC4_CLK_SEL			(0x1 << 19)
+#define MX50_CCM_CSCMR1_ESDHC3_CLK_SEL_OFFSET	(16)
+#define MX50_CCM_CSCMR1_ESDHC3_CLK_SEL_MASK		(0x7 << 16)
 #define MXC_CCM_CSCMR1_ESDHC3_MSHC2_CLK_SEL_OFFSET	(16)
 #define MXC_CCM_CSCMR1_ESDHC3_MSHC2_CLK_SEL_MASK		(0x3 << 16)
 #define MXC_CCM_CSCMR1_SSI1_CLK_SEL_OFFSET			(14)
@@ -770,6 +830,17 @@
 #define MXC_CCM_CLKSEQ_BYPASS_BYPASS_DISPLAY_AXI_CLK_SEL_OFFSET	2
 #define MXC_CCM_CLKSEQ_BYPASS_BYPASS_DISPLAY_AXI_CLK_SEL_MASK	(0x3 << 2)
 
+/* Define the bits in registers CLK_SYS */
+#define MXC_CCM_CLK_SYS_SYS_XTAL_CLKGATE_OFFSET        (30)
+#define MXC_CCM_CLK_SYS_SYS_XTAL_CLKGATE_MASK  (0x3 << 30)
+#define MXC_CCM_CLK_SYS_SYS_PLL_CLKGATE_OFFSET         (28)
+#define MXC_CCM_CLK_SYS_SYS_PLL_CLKGATE_MASK   (0x3 << 28)
+#define MXC_CCM_CLK_SYS_DIV_XTAL_OFFSET                        (6)
+#define MXC_CCM_CLK_SYS_DIV_XTAL_MASK                  (0xF << 6)
+#define MXC_CCM_CLK_SYS_DIV_PLL_OFFSET                 (0)
+#define MXC_CCM_CLK_SYS_DIV_PLL_MASK                           (0x3F)
+
+
 
 /* Define the bits in registers CLK_DDR */
 #define MXC_CCM_CLK_DDR_DDR_CLKGATE_OFFSET	(30)
@@ -787,6 +858,11 @@
 /* Define the bits in register EPDC_AXI */
 #define MXC_CCM_EPDC_AXI_CLKGATE_OFFSET	(30)
 #define MXC_CCM_EPDC_AXI_CLKGATE_MASK	(0x3 << 30)
+#define MXC_CCM_EPDC_AXI_ASM_EN                 (1 << 9)
+#define MXC_CCM_EPDC_AXI_ASM_DIV_OFFSET		(6)
+#define MXC_CCM_DISPLAY_AXI_PXP_ASM_EN          (1 << 13)
+#define MXC_CCM_DISPLAY_AXI_PXP_ASM_DIV_MASK    (0x7 << 10)
+#define MXC_CCM_DISPLAY_AXI_PXP_ASM_DIV_OFFSET  10
 #define MXC_CCM_EPDC_AXI_DIV_OFFSET		(0)
 #define MXC_CCM_EPDC_AXI_DIV_MASK		(0x3F)
 
@@ -821,18 +897,16 @@
 #define MXC_SRPG_MEGAMIX_BASE	(MXC_GPC_BASE + 0x2E0)
 #define MXC_SRPG_EMI_BASE	(MXC_GPC_BASE + 0x300)
 
-/* CORTEXA8 platform */
-extern void __iomem *arm_plat_base;
-#define MXC_CORTEXA8_BASE		(arm_plat_base)
-#define MXC_CORTEXA8_PLAT_PVID		(arm_plat_base + 0x0)
-#define MXC_CORTEXA8_PLAT_GPC		(arm_plat_base + 0x4)
-#define MXC_CORTEXA8_PLAT_PIC		(arm_plat_base + 0x8)
-#define MXC_CORTEXA8_PLAT_LPC		(arm_plat_base + 0xC)
-#define MXC_CORTEXA8_PLAT_NEON_LPC	(arm_plat_base + 0x10)
-#define MXC_CORTEXA8_PLAT_ICGC		(arm_plat_base + 0x14)
-#define MXC_CORTEXA8_PLAT_AMC		(arm_plat_base + 0x18)
-#define MXC_CORTEXA8_PLAT_NMC		(arm_plat_base + 0x20)
-#define MXC_CORTEXA8_PLAT_NMS		(arm_plat_base + 0x24)
+/* CORTEXA8 platform offsets */
+#define MXC_CORTEXA8_PLAT_PVID		(0x0)
+#define MXC_CORTEXA8_PLAT_GPC		(0x4)
+#define MXC_CORTEXA8_PLAT_PIC		(0x8)
+#define MXC_CORTEXA8_PLAT_LPC		(0xC)
+#define MXC_CORTEXA8_PLAT_NEON_LPC	(0x10)
+#define MXC_CORTEXA8_PLAT_ICGC		(0x14)
+#define MXC_CORTEXA8_PLAT_AMC		(0x18)
+#define MXC_CORTEXA8_PLAT_NMC		(0x20)
+#define MXC_CORTEXA8_PLAT_NMS		(0x24)
 
 /* DVFS CORE */
 #define MXC_DVFSTHRS		(MXC_DVFS_CORE_BASE + 0x00)
@@ -864,11 +938,12 @@ extern void __iomem *arm_plat_base;
 #define MXC_DVFSPER_PMCR1	(MXC_DVFS_PER_BASE + 0x1C)
 
 /* GPC */
-#define MXC_GPC_CNTR		(MXC_GPC_BASE + 0x0)
-#define MXC_GPC_PGR		(MXC_GPC_BASE + 0x4)
-#define MXC_GPC_VCR		(MXC_GPC_BASE + 0x8)
-#define MXC_GPC_ALL_PU		(MXC_GPC_BASE + 0xC)
-#define MXC_GPC_NEON		(MXC_GPC_BASE + 0x10)
+#define MXC_GPC_CNTR				(MXC_GPC_BASE  + 0x0)
+#define MXC_GPC_PGR				(MXC_GPC_BASE  + 0x4)
+#define MXC_GPC_VCR				(MXC_GPC_BASE  + 0x8)
+#define MXC_GPC_CNTR_OFFSET		0x0
+#define MXC_GPC_PGR_OFFSET		0x4
+#define MXC_GPC_VCR_OFFSET		0x8
 
 /* PGC */
 #define MXC_PGC_IPU_PGCR	(MXC_PGC_IPU_BASE + 0x0)

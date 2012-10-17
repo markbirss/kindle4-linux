@@ -1225,10 +1225,10 @@ static void __init init_mutexes(void)
 	int i;
 
 	for (i = 0; i < MAX_DMA_CHANNELS; i++) {
-		init_MUTEX(&sdma_synch_mutex[i]);
+		semaphore_init(&sdma_synch_mutex[i]);
 	}
 
-	init_MUTEX(&sdma_status_mutex);
+	semaphore_init(&sdma_status_mutex);
 }
 
 /*!
@@ -1410,7 +1410,7 @@ int sdma_probe(struct platform_device *pdev)
 		res = -ENODEV;
 		goto sdma_init_fail;
 	}
-	res = request_irq(MXC_INT_SDMA, sdma_int_handler, 0, dev_name(&pdev->dev), 0);
+	res = request_irq(MXC_INT_SDMA, sdma_int_handler, IRQF_NODELAY, dev_name(&pdev->dev), 0);
 
 	if (res < 0) {
 		goto sdma_init_fail;

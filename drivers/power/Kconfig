@@ -124,4 +124,24 @@ config MXS_VBUS_CURRENT_DRAW
 	  Say Y to enable 100mA limitation when USB vbus power on system
 	  before enumeration to match USB2.0 requirement.
 
+config BATTERY_YOSHI
+        tristate "MX5 YOSHI Battery Driver"
+        help
+          Say Y to enable support for reading the MX5 YOSHI Battery
+
+config BATTERY_BQ27541
+	tristate "BQ27541 Battery Driver"
+	help
+	  Say Y to enable support for interfacing the BQ27541 battery
+
+config MAXIM_AL32
+	tristate "Maxim AL32 USB Charger Detector Driver"
+	help
+	  Say Y to enable support for Maxim AL32 USB Charger Detector
+
+config SUMMIT_SMB347
+	tristate "Summit SMB347 USB Charger IC"
+	help
+	  Say Y to enable support for the Summit SMB347 USB Charger IC
+
 endif # POWER_SUPPLY

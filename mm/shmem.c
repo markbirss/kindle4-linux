@@ -2167,10 +2167,14 @@ static int shmem_parse_options(char *options, struct shmem_sb_info *sbinfo,
 		if ((value = strchr(this_char,'=')) != NULL) {
 			*value++ = 0;
 		} else {
-			printk(KERN_ERR
-			    "tmpfs: No value for mount option '%s'\n",
-			    this_char);
-			return 1;
+
+			/* relatime is default */
+			if (strcmp(this_char,"relatime")) {
+				printk(KERN_ERR
+				    "tmpfs: No value for mount option '%s'\n",
+				    this_char);
+				return 1;
+			}
 		}
 
 		if (!strcmp(this_char,"size")) {
@@ -2215,6 +2219,9 @@ static int shmem_parse_options(char *options, struct shmem_sb_info *sbinfo,
 		} else if (!strcmp(this_char,"mpol")) {
 			if (mpol_parse_str(value, &sbinfo->mpol, 1))
 				goto bad_val;
+		} else if (!strcmp(this_char,"relatime")) {
+			if (remount)
+				continue;
 		} else {
 			printk(KERN_ERR "tmpfs: Bad mount option %s\n",
 			       this_char);

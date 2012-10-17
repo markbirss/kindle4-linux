@@ -32,6 +32,7 @@
 #include <linux/delay.h>
 #include <linux/pmic_external.h>
 #include <linux/pmic_status.h>
+#include <linux/pmic_light.h>
 #include <linux/mfd/mc13892/core.h>
 
 #include <asm/mach-types.h>
@@ -54,6 +55,15 @@ static struct mxc_pmic pmic_drv_data;
 #ifndef CONFIG_MXC_PMIC_I2C
 struct i2c_client *mc13892_client;
 #endif
+
+#define PMIC_ICHRG_DEFAULT	0x1	/* Default charging if not open or AC */
+#define PMIC_ICHRG_OPEN		0xf	/* Externally powered */
+#define CHGDETS			0x40
+#define IDFACTORYS		(1<<4)
+#define CHRGLEDEN		18 	/* offset 18 in REG_CHARGE */
+#define BIT_CHG_CURR_LSH	3
+#define BIT_CHG_CURR_WID	4
+#define PMIC_ICHRG		0x5	/* Wall charger */
 
 int pmic_i2c_24bit_read(struct i2c_client *client, unsigned int reg_num,
 			unsigned int *value)
@@ -130,7 +140,13 @@ int pmic_read(int reg_num, unsigned int *reg_val)
 int pmic_write(int reg_num, const unsigned int reg_val)
 {
 	unsigned int frame = 0;
+	unsigned int val;
 	int ret = 0;
+
+	/* mask LEDKPDC5 */
+	if (reg_num == 52)
+		val = reg_val & ~(1U<<8);
+	else val = reg_val;
 
 	if (pmic_drv_data.spi != NULL) {
 		if (reg_num > MXC_PMIC_MAX_REG_NUM)
@@ -140,7 +156,7 @@ int pmic_write(int reg_num, const unsigned int reg_val)
 
 		frame |= reg_num << MXC_PMIC_REG_NUM_SHIFT;
 
-		frame |= reg_val & MXC_PMIC_FRAME_MASK;
+		frame |= val & MXC_PMIC_FRAME_MASK;
 
 		ret = spi_rw(pmic_drv_data.spi, (u8 *) &frame, 1);
 
@@ -184,8 +200,121 @@ int pmic_spi_setup(struct spi_device *spi)
 	return spi_setup(spi);
 }
 
+int pmic_check_factory_mode(void) 
+{
+	unsigned int value;
+
+	pmic_read_reg(REG_INT_SENSE0, &value, IDFACTORYS);
+	if (value) {
+	    return 1;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(pmic_check_factory_mode);
+
+static void pmic_set_ichrg(unsigned short curr)
+{
+	unsigned int mask;
+	unsigned int value;
+
+	/* Don't enable charging if we're in factory mode */
+	if (pmic_check_factory_mode()) {
+	    printk(KERN_INFO "%s: Factory mode enabled\n", __func__);
+	    return;
+	}
+
+	printk(KERN_INFO "Setting ichrg to %d\n", curr);
+
+	/* Turn on CHRGLED */
+	pmic_write_reg(REG_CHARGE, (1 << 18), (1 << 18));
+
+	/* Turn on V & I programming */
+	pmic_write_reg(REG_CHARGE, (1 << 23), (1 << 23));
+
+	/* Turn off CHGAUTOB */
+	pmic_write_reg(REG_CHARGE, (1 << 21), (1 << 21));
+
+	/* Turn off TRICKLE CHARGE */
+	pmic_write_reg(REG_CHARGE, (0 << 7), (1 << 7));
+
+	/* Set the ichrg */
+	value = BITFVAL(BIT_CHG_CURR, curr);
+	mask = BITFMASK(BIT_CHG_CURR);
+	pmic_write_reg(REG_CHARGE, value, mask);
+
+	/* Restart charging */
+	pmic_write_reg(REG_CHARGE, (1 << 20), (1 << 20));
+}
+
+/*!
+ * Check if a charger is connected or not
+ */
+int pmic_connected_charger(void)
+{
+	int sense_0 = 0;
+	int ret = 0; /* Default: no host */
+
+	pmic_read_reg(REG_INT_SENSE0, &sense_0, 0xffffff);
+
+	if (sense_0 & CHGDETS)
+		ret = 1;
+
+	return ret;
+}
+EXPORT_SYMBOL(pmic_connected_charger);
+
+static void pmic_enable_green_led(int enable)
+{
+	if (enable == 1) {
+		mc13892_bklit_set_current(LIT_KEY, 0x7);
+		mc13892_bklit_set_ramp(LIT_KEY, 0);
+		mc13892_bklit_set_dutycycle(LIT_KEY, 0x3f);
+	}
+	else {
+		mc13892_bklit_set_current(LIT_KEY, 0);
+		mc13892_bklit_set_dutycycle(LIT_KEY, 0);
+	}
+}
+
+int yoshi_button_green_led = 0;
+EXPORT_SYMBOL(yoshi_button_green_led);
+
+/* Disable charging even if charger is connected */
+void pmic_stop_charging(void)
+{
+    unsigned int mask;
+    unsigned int value;
+
+    if (pmic_check_factory_mode()) {
+	printk(KERN_INFO "%s: Factory mode enabled\n", __func__);
+	return;
+    }
+
+    /* Set the ichrg to 0 */
+    value = BITFVAL(BIT_CHG_CURR, 0);
+    mask = BITFMASK(BIT_CHG_CURR);
+    pmic_write_reg(REG_CHARGE, value, mask);
+
+    /* Shut off the green LED */
+    pmic_enable_green_led(0);
+
+    /* Shut off the CHRGLEDEN bit */
+    pmic_write_reg(REG_CHARGE, (0 << CHRGLEDEN), (1 << CHRGLEDEN));
+
+    yoshi_button_green_led = 0;
+}
+EXPORT_SYMBOL(pmic_stop_charging);
+
 int pmic_init_registers(void)
 {
+	int sense_0 = 0;
+	int wall = 0;
+
+	pmic_read_reg(REG_INT_STATUS0, &sense_0, 0xffffff);
+	if (sense_0 & 0x200000)
+		wall = 1;
+
 	CHECK_ERROR(pmic_write(REG_INT_MASK0, 0xFFFFFF));
 	CHECK_ERROR(pmic_write(REG_INT_MASK0, 0xFFFFFF));
 	CHECK_ERROR(pmic_write(REG_INT_STATUS0, 0xFFFFFF));
@@ -194,16 +323,27 @@ int pmic_init_registers(void)
 	if (machine_is_mx51_3ds())
 		CHECK_ERROR(pmic_write(REG_CHARGE, 0xB40003));
 
-	pm_power_off = mc13892_power_off;
+	if (pmic_connected_charger()) {
+	    int curr = (wall) ? PMIC_ICHRG : PMIC_ICHRG_DEFAULT;
+	    pmic_set_ichrg(curr);
+	} else {
+	    yoshi_button_green_led = 1;
+	    pmic_enable_green_led(1);
+	}
 
 	return PMIC_SUCCESS;
 }
+
+extern int mxc_spi_suspended;
 
 unsigned int pmic_get_active_events(unsigned int *active_events)
 {
 	unsigned int count = 0;
 	unsigned int status0, status1;
 	int bit_set;
+	
+	while (mxc_spi_suspended)
+		yield();
 
 	pmic_read(REG_INT_STATUS0, &status0);
 	pmic_read(REG_INT_STATUS1, &status1);
@@ -228,8 +368,8 @@ unsigned int pmic_get_active_events(unsigned int *active_events)
 	return count;
 }
 
-#define EVENT_MASK_0			0x387fff
-#define EVENT_MASK_1			0x1177eb
+#define EVENT_MASK_0			0x397fff
+#define EVENT_MASK_1			0x1177fb
 
 int pmic_event_unmask(type_event event)
 {
@@ -250,6 +390,8 @@ int pmic_event_unmask(type_event event)
 		event_bit = (1 << event);
 		events_enabled1 |= event_bit;
 	}
+
+	pr_debug("even=%d, event_mask=0x%x\n", event_bit, event_mask);
 
 	if ((event_bit & event_mask) == 0) {
 		pr_debug("Error: unmasking a reserved/unused event\n");

@@ -679,13 +679,6 @@ static inline void
 rt_spin_lock_fastlock(struct rt_mutex *lock,
 		void  (*slowfn)(struct rt_mutex *lock))
 {
-	/* Temporary HACK! */
-	if (likely(!current->in_printk))
-		might_sleep();
-	else if (in_atomic() || irqs_disabled())
-		/* don't grab locks for printk in atomic */
-		return;
-
 	if (likely(rt_mutex_cmpxchg(lock, NULL, current)))
 		rt_mutex_deadlock_account_lock(lock, current);
 	else

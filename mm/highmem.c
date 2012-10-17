@@ -75,6 +75,7 @@ pte_t * pkmap_page_table;
 
 static DECLARE_WAIT_QUEUE_HEAD(pkmap_wait);
 
+static spinlock_t kmap_lock = SPIN_LOCK_UNLOCKED;
 
 /*
  * Most architectures have no use for kmap_high_get(), so let's abstract
@@ -372,8 +373,8 @@ void *kmap_high_get(struct page *page)
 	lock_kmap_any(flags);
 	vaddr = (unsigned long)page_address(page);
 	if (vaddr) {
-		BUG_ON(pkmap_count[PKMAP_NR(vaddr)] < 1);
-		pkmap_count[PKMAP_NR(vaddr)]++;
+		BUG_ON(atomic_read(&pkmap_count[PKMAP_NR(vaddr)]) < 1);
+		atomic_add(1, &pkmap_count[PKMAP_NR(vaddr)]);
 	}
 	unlock_kmap_any(flags);
 	return (void*) vaddr;

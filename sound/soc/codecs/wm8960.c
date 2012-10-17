@@ -1,7 +1,7 @@
 /*
- * wm8960.c  --  WM8960 ALSA SoC Audio driver
- *
- * Author: Liam Girdwood
+ * Copyright (C) 2010-2011 Amazon Technologies Inc.
+ * Manish Lachwani (lachwani@lab126.com)
+ * Vidhyananth Venkatasamy (venkatas@lab126.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -14,7 +14,16 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
+#include <linux/sysfs.h>
+#include <linux/sysdev.h>
 #include <linux/platform_device.h>
+#include <linux/irq.h>
+#include <linux/irqreturn.h>
+#include <linux/interrupt.h>
+#include <linux/notifier.h>
+#include <linux/reboot.h>
+#include <linux/miscdevice.h>
+
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -23,24 +32,81 @@
 #include <sound/initval.h>
 #include <sound/tlv.h>
 
+#ifdef CONFIG_DEBUG_FS
+#include <linux/debugfs.h>
+#endif
+
 #include "wm8960.h"
 
 #define AUDIO_NAME "wm8960"
+#define WM8960_VERSION "0.1"
+
+#define WM8960_OFF_THRESHOLD	0	/* Threshold for powering off the codec */
 
 struct snd_soc_codec_device soc_codec_dev_wm8960;
 
+static int wm8960_set_bias_level(struct snd_soc_codec *codec,
+				enum snd_soc_bias_level level);
+
+static int wm8960_reboot(struct notifier_block *self, unsigned long action, void *cpu);
+
+static struct notifier_block wm8960_reboot_nb =
+{
+	.notifier_call	= wm8960_reboot,
+};
+
+static atomic_t power_status;
+static int power_off_timeout = WM8960_OFF_THRESHOLD; /* in msecs */
+
+/* Send event to userspace for headset */
+
+#define HEADSET_MINOR	165	/* Headset event passing */
+
+static struct miscdevice mxc_headset = {
+	HEADSET_MINOR,
+	"mxc_ALSA",
+	NULL,
+};
+
+static int power_status_read(void) 
+{
+    return atomic_read(&power_status);
+}
+
+static void power_status_write(int value)
+{
+    atomic_set(&power_status, value);
+}
+
+#define SPKR_ENABLE			0xc0	/* Bits 6 and 7 enable the speakers */
+#define HPSWPOLARITY		0x20	/* Turn on the headset polarity bit to detect headset */
+#define LOUT2				0x1FF	/* Enable SPKR LEFT Volume and set the levels */
+#define ROUT2				0x1FF	/* Enable SPKR RIGHT Volume and set the levels */
+#define SPKR_POWER			0x18	/* Enable Power for right and left speakers */
+#define LOUT1				0x16d	/* Enable HEADPHONE LEFT Volume */
+#define ROUT1				0x16d	/* Enable HEADPHONE RIGHT Volume */
+#define LDAC				0x1f5	/* Left DAC volume */
+#define RDAC				0x1f5	/* Right DAC volume */
+#define POWER1				0xc0	/* Power register 1 */
+#define POWER2				0x1fb	/* Power register 2 */
+#define POWER3				0x0c	/* Power register 3 */
+#define SPKR_CONFIG			0xF7	/* Speaker Config */
+#define CLASSD3_CONFIG		0x80	/* CLASSD Control 3 */
+
+#define HSDET_THRESHOLD		500		/* 500ms debounce */
+
 /* R25 - Power 1 */
-#define WM8960_VREF      0x40
+#define WM8960_VREF      	0x40
 
 /* R28 - Anti-pop 1 */
-#define WM8960_POBCTRL   0x80
-#define WM8960_BUFDCOPEN 0x10
-#define WM8960_BUFIOEN   0x08
-#define WM8960_SOFT_ST   0x04
-#define WM8960_HPSTBY    0x01
+#define WM8960_POBCTRL   	0x80
+#define WM8960_BUFDCOPEN 	0x10
+#define WM8960_BUFIOEN   	0x08
+#define WM8960_SOFT_ST   	0x04
+#define WM8960_HPSTBY    	0x01
 
 /* R29 - Anti-pop 2 */
-#define WM8960_DISOP     0x40
+#define WM8960_DISOP     	0x40
 
 /*
  * wm8960 register cache
@@ -69,17 +135,215 @@ struct wm8960_priv {
 	struct snd_soc_codec codec;
 };
 
+extern int gpio_headset_status(void);
+extern int gpio_headset_irq(void);
+
+/*
+ * WM8960 Codec /sys
+ */
+
+/* Default is Reg #0. Value of > 55 means dump all the codec registers */
+static int wm8960_reg_number = 0;
+
+struct snd_soc_codec *wm8960_codec;
+static inline unsigned int wm8960_read_reg_cache(struct snd_soc_codec *codec,
+				unsigned int reg);
+static int wm8960_write(struct snd_soc_codec *codec, unsigned int reg,
+				unsigned int value);
+
+static void wm8960_configure_capture(struct snd_soc_codec *codec);
+static void wm8960_headset_mute(int mute);
+
+/*
+ * Debug - dump all the codec registers
+ */
+static void dump_regs(struct snd_soc_codec *codec)
+{
+	int i = 0;
+	u16 *cache = codec->reg_cache;
+
+	for (i=0; i < WM8960_CACHEREGNUM; i++) {
+		printk("Register %d - Value:%x\n", i, cache[i]);
+	}
+}
+
+DEFINE_MUTEX(wm8960_codec_lock);
+
+/*
+ * sysfs entries for the codec
+ */
+static ssize_t wm8960_regoff_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+	int value = 0;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Could not store the codec register value\n");
+		return -EINVAL;
+	}
+
+	wm8960_reg_number = value;
+
+	return size;
+}
+
+static ssize_t wm8960_regoff_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+	char *curr = buf;
+
+	curr += sprintf(curr, "WM8960 Register Number: %d\n", wm8960_reg_number);
+	curr += sprintf(curr, "\n");
+
+	return curr - buf;
+}
+
+static SYSDEV_ATTR(wm8960_regoff, 0644, wm8960_regoff_show, wm8960_regoff_store);
+
+static ssize_t wm8960_regval_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+	char *curr = buf;
+
+	if (wm8960_reg_number >= WM8960_CACHEREGNUM) {
+		/* dump all the regs */
+		curr += sprintf(curr, "WM8960 Registers\n");
+		curr += sprintf(curr, "\n");
+		dump_regs(wm8960_codec);
+	}
+	else {
+		curr += sprintf(curr, "WM8960 Register %d\n", wm8960_reg_number);
+		curr += sprintf(curr, "\n");
+		curr += sprintf(curr, " Value: 0x%x\n",
+				wm8960_read_reg_cache(wm8960_codec, wm8960_reg_number));
+		curr += sprintf(curr, "\n");
+	}
+
+	return curr - buf;
+}
+
+static ssize_t wm8960_regval_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+	int value = 0;
+
+	if (wm8960_reg_number >= WM8960_CACHEREGNUM) {
+		printk(KERN_ERR "No codec register %d\n", wm8960_reg_number);
+		return size;
+	}
+
+	if (sscanf(buf, "%x", &value) <= 0) {
+		printk(KERN_ERR "Error setting the value in the register\n");
+		return -EINVAL;
+	}
+	
+	wm8960_write(wm8960_codec, wm8960_reg_number, value);
+	return size;
+}
+static SYSDEV_ATTR(wm8960_regval, 0644, wm8960_regval_show, wm8960_regval_store);
+
+static ssize_t wm8960_headset_status_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+	char *curr = buf;
+
+	curr += sprintf(curr, "%d\n", gpio_headset_status());
+
+	return curr - buf;
+}
+static SYSDEV_ATTR(wm8960_headset_status, 0644, wm8960_headset_status_show, NULL);
+
+/*
+ * Codec power status
+ * NOTE: does not work for the capture case
+ */ 
+
+static ssize_t wm8960_power_status_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+    char *curr = buf;
+
+    curr += sprintf(curr, "%d\n", power_status_read());
+
+    return curr - buf;
+}
+static SYSDEV_ATTR(wm8960_power_status, 0644, wm8960_power_status_show, NULL);
+
+/*
+ * Codec power off timeout
+ * NOTE: does not work for the capture case
+ */
+static ssize_t wm8960_power_off_timeout_show(struct sys_device *dev, struct sysdev_attribute *attr, char *buf)
+{
+    char *curr = buf;
+    
+    curr += sprintf(curr, "%d\n", power_off_timeout);
+
+    return curr - buf;
+}
+
+static ssize_t wm8960_power_off_timeout_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+	int value = 0;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Error setting the value for timeout\n");
+		return -EINVAL;
+	}
+
+        power_off_timeout = value;
+
+	return size;
+}
+static SYSDEV_ATTR(wm8960_power_off_timeout, 0644, wm8960_power_off_timeout_show, wm8960_power_off_timeout_store);
+
+static ssize_t wm8960_codec_mute_store(struct sys_device *dev, struct sysdev_attribute *attr, const char *buf, size_t size)
+{
+    int value = 0;
+
+    if (sscanf(buf, "%d", &value) < 0) {
+        printk(KERN_ERR "Error setting mute/unmute, mute=1, unmute=0\n");
+        return -EINVAL;
+    }
+
+    if (value < 0 || value > 1) {
+        printk(KERN_ERR "Invalid value, mute=1, unmute=0\n");
+        return -EINVAL;
+    }
+
+	wm8960_headset_mute(value);
+
+    return size;
+}
+
+static SYSDEV_ATTR(wm8960_codec_mute, 0644, NULL, wm8960_codec_mute_store);
+
+static struct sysdev_class audio_wm8960_sysclass = {
+	.name	= "audio_wm8960",
+};
+
+static struct sys_device audio_wm8960_device = {
+	.id	= 0,
+	.cls	= &audio_wm8960_sysclass,
+};
+
 /*
  * read wm8960 register cache
  */
 static inline unsigned int wm8960_read_reg_cache(struct snd_soc_codec *codec,
 	unsigned int reg)
 {
-	u16 *cache = codec->reg_cache;
-	if (reg == WM8960_RESET)
+	u16 *cache;
+
+	mutex_lock(&wm8960_codec_lock);
+
+	cache = codec->reg_cache;
+	if (reg == WM8960_RESET) {
+		mutex_unlock(&wm8960_codec_lock);
 		return 0;
-	if (reg >= WM8960_CACHEREGNUM)
+	}
+
+	if (reg >= WM8960_CACHEREGNUM) {
+		mutex_unlock(&wm8960_codec_lock);
 		return -1;
+	}
+
+	mutex_unlock(&wm8960_codec_lock);
+
 	return cache[reg];
 }
 
@@ -95,12 +359,6 @@ static inline void wm8960_write_reg_cache(struct snd_soc_codec *codec,
 	cache[reg] = value;
 }
 
-static inline unsigned int wm8960_read(struct snd_soc_codec *codec,
-	unsigned int reg)
-{
-	return wm8960_read_reg_cache(codec, reg);
-}
-
 /*
  * write to the WM8960 register space
  */
@@ -108,6 +366,9 @@ static int wm8960_write(struct snd_soc_codec *codec, unsigned int reg,
 	unsigned int value)
 {
 	u8 data[2];
+	int ret = 0;
+
+        mutex_lock(&wm8960_codec_lock);
 
 	/* data is
 	 *   D15..D9 WM8960 register offset
@@ -116,11 +377,17 @@ static int wm8960_write(struct snd_soc_codec *codec, unsigned int reg,
 	data[0] = (reg << 1) | ((value >> 8) & 0x0001);
 	data[1] = value & 0x00ff;
 
-	wm8960_write_reg_cache(codec, reg, value);
-	if (codec->hw_write(codec->control_data, data, 2) == 2)
+	wm8960_write_reg_cache (codec, reg, value);
+	ret = codec->hw_write(codec->control_data, data, 2);
+
+	if (ret == 2) {
+		mutex_unlock(&wm8960_codec_lock);
 		return 0;
-	else
-		return -EIO;
+	}
+	else {	
+		mutex_unlock(&wm8960_codec_lock);
+		return ret;
+	}
 }
 
 #define wm8960_reset(c)	wm8960_write(c, WM8960_RESET, 0)
@@ -246,6 +513,7 @@ SOC_DAPM_SINGLE("Left Switch", WM8960_MONOMIX1, 7, 1, 0),
 SOC_DAPM_SINGLE("Right Switch", WM8960_MONOMIX2, 7, 1, 0),
 };
 
+/* No Dynamic PM at the moment */
 static const struct snd_soc_dapm_widget wm8960_dapm_widgets[] = {
 SND_SOC_DAPM_INPUT("LINPUT1"),
 SND_SOC_DAPM_INPUT("RINPUT1"),
@@ -254,43 +522,43 @@ SND_SOC_DAPM_INPUT("RINPUT2"),
 SND_SOC_DAPM_INPUT("LINPUT3"),
 SND_SOC_DAPM_INPUT("RINPUT3"),
 
-SND_SOC_DAPM_MICBIAS("MICB", WM8960_POWER1, 1, 0),
+SND_SOC_DAPM_MICBIAS("MICB", SND_SOC_NOPM, 0, 0),
 
-SND_SOC_DAPM_MIXER("Left Boost Mixer", WM8960_POWER1, 5, 0,
+SND_SOC_DAPM_MIXER("Left Boost Mixer", SND_SOC_NOPM, 0, 0,
 		   wm8960_lin_boost, ARRAY_SIZE(wm8960_lin_boost)),
-SND_SOC_DAPM_MIXER("Right Boost Mixer", WM8960_POWER1, 4, 0,
+SND_SOC_DAPM_MIXER("Right Boost Mixer", SND_SOC_NOPM, 4, 0,
 		   wm8960_rin_boost, ARRAY_SIZE(wm8960_rin_boost)),
 
-SND_SOC_DAPM_MIXER("Left Input Mixer", WM8960_POWER3, 5, 0,
+SND_SOC_DAPM_MIXER("Left Input Mixer", SND_SOC_NOPM, 5, 0,
 		   wm8960_lin, ARRAY_SIZE(wm8960_lin)),
-SND_SOC_DAPM_MIXER("Right Input Mixer", WM8960_POWER3, 4, 0,
+SND_SOC_DAPM_MIXER("Right Input Mixer", SND_SOC_NOPM, 4, 0,
 		   wm8960_rin, ARRAY_SIZE(wm8960_rin)),
 
-SND_SOC_DAPM_ADC("Left ADC", "Capture", WM8960_POWER2, 3, 0),
-SND_SOC_DAPM_ADC("Right ADC", "Capture", WM8960_POWER2, 2, 0),
+SND_SOC_DAPM_ADC("Left ADC", "Capture", SND_SOC_NOPM, 3, 0),
+SND_SOC_DAPM_ADC("Right ADC", "Capture", SND_SOC_NOPM, 2, 0),
 
-SND_SOC_DAPM_DAC("Left DAC", "Playback", WM8960_POWER2, 8, 0),
-SND_SOC_DAPM_DAC("Right DAC", "Playback", WM8960_POWER2, 7, 0),
+SND_SOC_DAPM_DAC("Left DAC", "Playback", SND_SOC_NOPM, 8, 0),
+SND_SOC_DAPM_DAC("Right DAC", "Playback", SND_SOC_NOPM, 7, 0),
 
-SND_SOC_DAPM_MIXER("Left Output Mixer", WM8960_POWER3, 3, 0,
+SND_SOC_DAPM_MIXER("Left Output Mixer", SND_SOC_NOPM, 3, 0,
 	&wm8960_loutput_mixer[0],
 	ARRAY_SIZE(wm8960_loutput_mixer)),
-SND_SOC_DAPM_MIXER("Right Output Mixer", WM8960_POWER3, 2, 0,
+SND_SOC_DAPM_MIXER("Right Output Mixer", SND_SOC_NOPM, 2, 0,
 	&wm8960_routput_mixer[0],
 	ARRAY_SIZE(wm8960_routput_mixer)),
 
-SND_SOC_DAPM_MIXER("Mono Output Mixer", WM8960_POWER2, 1, 0,
+SND_SOC_DAPM_MIXER("Mono Output Mixer", SND_SOC_NOPM, 7, 0,
 	&wm8960_mono_out[0],
 	ARRAY_SIZE(wm8960_mono_out)),
 
-SND_SOC_DAPM_PGA("LOUT1 PGA", WM8960_POWER2, 6, 0, NULL, 0),
-SND_SOC_DAPM_PGA("ROUT1 PGA", WM8960_POWER2, 5, 0, NULL, 0),
+SND_SOC_DAPM_PGA("LOUT1 PGA", SND_SOC_NOPM, 6, 0, NULL, 0),
+SND_SOC_DAPM_PGA("ROUT1 PGA", SND_SOC_NOPM, 5, 0, NULL, 0),
 
-SND_SOC_DAPM_PGA("Left Speaker PGA", WM8960_POWER2, 4, 0, NULL, 0),
-SND_SOC_DAPM_PGA("Right Speaker PGA", WM8960_POWER2, 3, 0, NULL, 0),
+SND_SOC_DAPM_PGA("Left Speaker PGA", SND_SOC_NOPM, 4, 0, NULL, 0),
+SND_SOC_DAPM_PGA("Right Speaker PGA", SND_SOC_NOPM, 3, 0, NULL, 0),
 
-SND_SOC_DAPM_PGA("Right Speaker Output", WM8960_CLASSD1, 7, 0, NULL, 0),
-SND_SOC_DAPM_PGA("Left Speaker Output", WM8960_CLASSD1, 6, 0, NULL, 0),
+SND_SOC_DAPM_PGA("Right Speaker Output", SND_SOC_NOPM, 7, 0, NULL, 0),
+SND_SOC_DAPM_PGA("Left Speaker Output", SND_SOC_NOPM, 6, 0, NULL, 0),
 
 SND_SOC_DAPM_OUTPUT("SPK_LP"),
 SND_SOC_DAPM_OUTPUT("SPK_LN"),
@@ -354,14 +622,14 @@ static const struct snd_soc_dapm_route audio_paths[] = {
 	{ "OUT3", NULL, "Mono Output Mixer", }
 };
 
+static void wm8960_reinit(struct snd_soc_codec *codec);
+
 static int wm8960_add_widgets(struct snd_soc_codec *codec)
 {
 	snd_soc_dapm_new_controls(codec, wm8960_dapm_widgets,
-				  ARRAY_SIZE(wm8960_dapm_widgets));
-
+				ARRAY_SIZE(wm8960_dapm_widgets));
 	snd_soc_dapm_add_routes(codec, audio_paths, ARRAY_SIZE(audio_paths));
 
-	snd_soc_dapm_new_widgets(codec);
 	return 0;
 }
 
@@ -371,10 +639,13 @@ static int wm8960_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	struct snd_soc_codec *codec = codec_dai->codec;
 	u16 iface = 0;
 
+	wm8960_reinit(codec);
+
 	/* set master/slave audio interface */
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBM_CFM:
-		iface |= 0x0040;
+	case SND_SOC_DAIFMT_CBS_CFM:
+		iface |= 0x040; /* Codec is Master */
 		break;
 	case SND_SOC_DAIFMT_CBS_CFS:
 		break;
@@ -385,7 +656,7 @@ static int wm8960_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	/* interface format */
 	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
 	case SND_SOC_DAIFMT_I2S:
-		iface |= 0x0002;
+		iface |= 0x002; /* Codec supports I2S */
 		break;
 	case SND_SOC_DAIFMT_RIGHT_J:
 		break;
@@ -418,6 +689,8 @@ static int wm8960_set_dai_fmt(struct snd_soc_dai *codec_dai,
 	default:
 		return -EINVAL;
 	}
+	/* Set the word length to 16 bits, i.e. bits 2 and 3 should be 0,0 */
+	iface = iface & 0x1f3;	
 
 	/* set iface */
 	wm8960_write(codec, WM8960_IFACE1, iface);
@@ -425,13 +698,13 @@ static int wm8960_set_dai_fmt(struct snd_soc_dai *codec_dai,
 }
 
 static int wm8960_hw_params(struct snd_pcm_substream *substream,
-			    struct snd_pcm_hw_params *params,
-			    struct snd_soc_dai *dai)
+	struct snd_pcm_hw_params *params,
+	struct snd_soc_dai *dai)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_soc_device *socdev = rtd->socdev;
 	struct snd_soc_codec *codec = socdev->card->codec;
-	u16 iface = wm8960_read(codec, WM8960_IFACE1) & 0xfff3;
+	u16 iface = wm8960_read_reg_cache(codec, WM8960_IFACE1) & 0xfff3;
 
 	/* bit size */
 	switch (params_format(params)) {
@@ -447,92 +720,22 @@ static int wm8960_hw_params(struct snd_pcm_substream *substream,
 
 	/* set iface */
 	wm8960_write(codec, WM8960_IFACE1, iface);
+
+	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
+		wm8960_configure_capture(codec);
+
 	return 0;
 }
 
 static int wm8960_mute(struct snd_soc_dai *dai, int mute)
 {
 	struct snd_soc_codec *codec = dai->codec;
-	u16 mute_reg = wm8960_read(codec, WM8960_DACCTL1) & 0xfff7;
+	u16 mute_reg = wm8960_read_reg_cache(codec, WM8960_DACCTL1) & 0xfff7;
 
 	if (mute)
 		wm8960_write(codec, WM8960_DACCTL1, mute_reg | 0x8);
 	else
 		wm8960_write(codec, WM8960_DACCTL1, mute_reg);
-	return 0;
-}
-
-static int wm8960_set_bias_level(struct snd_soc_codec *codec,
-				 enum snd_soc_bias_level level)
-{
-	struct wm8960_data *pdata = codec->dev->platform_data;
-	u16 reg;
-
-	switch (level) {
-	case SND_SOC_BIAS_ON:
-		break;
-
-	case SND_SOC_BIAS_PREPARE:
-		/* Set VMID to 2x50k */
-		reg = wm8960_read(codec, WM8960_POWER1);
-		reg &= ~0x180;
-		reg |= 0x80;
-		wm8960_write(codec, WM8960_POWER1, reg);
-		break;
-
-	case SND_SOC_BIAS_STANDBY:
-		if (codec->bias_level == SND_SOC_BIAS_OFF) {
-			/* Enable anti-pop features */
-			wm8960_write(codec, WM8960_APOP1,
-				     WM8960_POBCTRL | WM8960_SOFT_ST |
-				     WM8960_BUFDCOPEN | WM8960_BUFIOEN);
-
-			/* Discharge HP output */
-			reg = WM8960_DISOP;
-			if (pdata)
-				reg |= pdata->dres << 4;
-			wm8960_write(codec, WM8960_APOP2, reg);
-
-			msleep(400);
-
-			wm8960_write(codec, WM8960_APOP2, 0);
-
-			/* Enable & ramp VMID at 2x50k */
-			reg = wm8960_read(codec, WM8960_POWER1);
-			reg |= 0x80;
-			wm8960_write(codec, WM8960_POWER1, reg);
-			msleep(100);
-
-			/* Enable VREF */
-			wm8960_write(codec, WM8960_POWER1, reg | WM8960_VREF);
-
-			/* Disable anti-pop features */
-			wm8960_write(codec, WM8960_APOP1, WM8960_BUFIOEN);
-		}
-
-		/* Set VMID to 2x250k */
-		reg = wm8960_read(codec, WM8960_POWER1);
-		reg &= ~0x180;
-		reg |= 0x100;
-		wm8960_write(codec, WM8960_POWER1, reg);
-		break;
-
-	case SND_SOC_BIAS_OFF:
-		/* Enable anti-pop features */
-		wm8960_write(codec, WM8960_APOP1,
-			     WM8960_POBCTRL | WM8960_SOFT_ST |
-			     WM8960_BUFDCOPEN | WM8960_BUFIOEN);
-
-		/* Disable VMID and VREF, let them discharge */
-		wm8960_write(codec, WM8960_POWER1, 0);
-		msleep(600);
-
-		wm8960_write(codec, WM8960_APOP1, 0);
-		break;
-	}
-
-	codec->bias_level = level;
-
 	return 0;
 }
 
@@ -543,35 +746,33 @@ struct _pll_div {
 	u32 k:24;
 };
 
+static struct _pll_div pll_div;
+
 /* The size in bits of the pll divide multiplied by 10
  * to allow rounding later */
 #define FIXED_PLL_SIZE ((1 << 24) * 10)
 
-static int pll_factors(unsigned int source, unsigned int target,
-		       struct _pll_div *pll_div)
+/*
+ * Currently unused as the sampling rate values will be hard coded
+ */
+static void pll_factors(unsigned int target, unsigned int source)
 {
 	unsigned long long Kpart;
 	unsigned int K, Ndiv, Nmod;
 
-	pr_debug("WM8960 PLL: setting %dHz->%dHz\n", source, target);
-
-	/* Scale up target to PLL operating frequency */
-	target *= 4;
-
 	Ndiv = target / source;
 	if (Ndiv < 6) {
 		source >>= 1;
-		pll_div->pre_div = 1;
+		pll_div.pre_div = 1;
 		Ndiv = target / source;
 	} else
-		pll_div->pre_div = 0;
+		pll_div.pre_div = 0;
 
-	if ((Ndiv < 6) || (Ndiv > 12)) {
-		pr_err("WM8960 PLL: Unsupported N=%d\n", Ndiv);
-		return -EINVAL;
-	}
+	if ((Ndiv < 6) || (Ndiv > 12))
+		printk(KERN_WARNING
+			"WM8960 N value outwith recommended range! N = %d\n",Ndiv);
 
-	pll_div->n = Ndiv;
+	pll_div.n = Ndiv;
 	Nmod = target % source;
 	Kpart = FIXED_PLL_SIZE * (long long)Nmod;
 
@@ -586,111 +787,397 @@ static int pll_factors(unsigned int source, unsigned int target,
 	/* Move down to proper range now rounding is done */
 	K /= 10;
 
-	pll_div->k = K;
-
-	pr_debug("WM8960 PLL: N=%x K=%x pre_div=%d\n",
-		 pll_div->n, pll_div->k, pll_div->pre_div);
-
-	return 0;
+	pll_div.k = K;
 }
+
+/* Capture or playback */
+int wm8960_capture = 0;
+EXPORT_SYMBOL(wm8960_capture);
+
+static int headset_attached = 0;
+static int headset_detached = 0;
+
+static void wm8960_power_on(int power)
+{
+	if (power) {
+		wm8960_write(wm8960_codec, WM8960_APOP1, 0x94);
+		wm8960_write(wm8960_codec, WM8960_APOP2, 0x40);
+
+		mdelay(400);
+
+		wm8960_write(wm8960_codec, WM8960_POWER2, 0x62);
+		wm8960_write(wm8960_codec, WM8960_APOP2, 0x0);
+		wm8960_write(wm8960_codec, WM8960_POWER1, 0x80);
+	
+		mdelay(100);
+
+		wm8960_write(wm8960_codec, WM8960_POWER1, 0xc0);
+		wm8960_write(wm8960_codec, WM8960_APOP1, 0x0);
+		wm8960_write(wm8960_codec, WM8960_POWER2, 0x1fb);
+		wm8960_write(wm8960_codec, WM8960_POWER3, 0x0c);
+		wm8960_write(wm8960_codec, WM8960_LOUTMIX, 0x150);
+		wm8960_write(wm8960_codec, WM8960_ROUTMIX, 0x150);
+		wm8960_write(wm8960_codec, WM8960_LOUT1, LOUT1);
+		wm8960_write(wm8960_codec, WM8960_ROUT1, ROUT1);	
+		wm8960_write(wm8960_codec, WM8960_LOUT2, LOUT2);
+		wm8960_write(wm8960_codec, WM8960_ROUT2, ROUT2);
+		wm8960_write(wm8960_codec, WM8960_DACCTL2, 0xc);
+		wm8960_write(wm8960_codec, WM8960_DACCTL1, 0x0);
+
+                power_status_write(1);
+	}
+	else {
+                wm8960_write(wm8960_codec, WM8960_LOUT1, 0x0);
+                wm8960_write(wm8960_codec, WM8960_ROUT1, 0x10);	
+                wm8960_write(wm8960_codec, WM8960_LOUT2, 0x0);
+                wm8960_write(wm8960_codec, WM8960_ROUT2, 0x10);
+
+		wm8960_write(wm8960_codec, WM8960_DACCTL1, 0x8);
+		mdelay(20);
+
+		wm8960_write(wm8960_codec, WM8960_POWER2, 0x62);
+		mdelay(20);
+
+		wm8960_write(wm8960_codec, WM8960_CLASSD1, 0x37);
+		wm8960_write(wm8960_codec, WM8960_APOP1, 0x94);
+		mdelay(20);
+
+		wm8960_write(wm8960_codec, WM8960_POWER1, 0x0);
+		mdelay(1000);
+
+		wm8960_write(wm8960_codec, WM8960_POWER2, 0x0);
+
+                if (wm8960_capture) {
+                    wm8960_reset(wm8960_codec);
+                }
+                
+                power_status_write(0);
+		headset_attached = 0;
+		headset_detached = 0;
+	}
+}
+
+
+static void wm8960_power_on_startup(int power)
+{
+	wm8960_write(wm8960_codec, WM8960_LOUT1, 0x0);
+	wm8960_write(wm8960_codec, WM8960_ROUT1, 0x10);	
+	wm8960_write(wm8960_codec, WM8960_LOUT2, 0x0);
+	wm8960_write(wm8960_codec, WM8960_ROUT2, 0x10);
+
+	wm8960_write(wm8960_codec, WM8960_DACCTL1, 0x8);
+	wm8960_write(wm8960_codec, WM8960_POWER2, 0x62);
+
+	wm8960_write(wm8960_codec, WM8960_CLASSD1, 0x37);
+	wm8960_write(wm8960_codec, WM8960_APOP1, 0x94);
+
+	wm8960_write(wm8960_codec, WM8960_POWER1, 0x0);
+	wm8960_write(wm8960_codec, WM8960_POWER2, 0x0);
+
+	power_status_write(0);
+	headset_attached = 0;
+	headset_detached = 0;
+}
+
+static void wm8960_poweroff_work(struct work_struct *dummy)
+{
+	wm8960_power_on(0);
+	wm8960_capture = 0;       
+}
+
+static DECLARE_DELAYED_WORK(wm8960_poweroff_wq, &wm8960_poweroff_work);
+
+static int wm8960_trigger(struct snd_pcm_substream *substream, int cmd)
+{
+    switch(cmd) {
+    case SNDRV_PCM_TRIGGER_STOP:
+        /* If value of power_off_timeout is less than zero
+         * then keep the codec on forever
+         */
+        if (power_off_timeout >= 0)
+            schedule_delayed_work(&wm8960_poweroff_wq, msecs_to_jiffies(power_off_timeout));
+        break;
+
+    default:
+        break;
+    }
+
+    return 0;
+}
+
+static void wm8960_configure_capture(struct snd_soc_codec *codec)
+{
+	wm8960_write(wm8960_codec, WM8960_APOP1, 0x4);
+	wm8960_write(wm8960_codec, WM8960_APOP2, 0x0);
+
+	mdelay(400);
+
+	wm8960_write(wm8960_codec, WM8960_POWER2, 0x62);
+	wm8960_write(wm8960_codec, WM8960_POWER1, 0x80);
+
+	mdelay(100);	
+
+	/* ADC and DAC control registers */
+	wm8960_write(codec, WM8960_DACCTL1, 0x0);
+	wm8960_write(codec, WM8960_DACCTL2, 0xc);
+
+	/* Left and right channel output volume */
+	wm8960_write(codec, WM8960_ROUT1, 0x179);
+	wm8960_write(codec, WM8960_LOUT1, 0x179);
+
+	/* Left and right channel mixer volume */
+	wm8960_write(codec, WM8960_ROUTMIX, 0x150);
+	wm8960_write(codec, WM8960_LOUTMIX, 0x150);
+
+	/* Set WL8 and ALRCGPIO enabled */
+	wm8960_write(codec, WM8960_IFACE2, 0x40);
+
+	/* Configure WL - 16bits, Master mode and I2S format */
+	wm8960_write(codec, WM8960_IFACE1, 0x42);
+
+	/* Left Mic Boost */
+	wm8960_write(codec, WM8960_LINPATH, 0x138);
+
+	/* Right Mic Boost */
+	wm8960_write(codec, WM8960_RINPATH, 0x108);
+
+	/* Left/right input volumes */
+	wm8960_write(codec, WM8960_LINVOL, 0x13f);
+	wm8960_write(codec, WM8960_RINVOL, 0x13f);
+
+	/* Max input gain setting */
+	wm8960_write(codec, WM8960_ALC1, 0x0);
+
+	/* Left ADC Channel. No right channel since input is MONO */
+	wm8960_write(codec, WM8960_LADC, 0x1c3);
+
+	/* Power Management: Turn on ADC left and right, MIC and VMID */
+	wm8960_write(codec, WM8960_POWER1, 0xfe);
+
+	/* Power Management: Turn on DAC, speaker and PLL */
+	wm8960_write(codec, WM8960_POWER2, 0x1fb);
+
+	/* Power Management: Turn on Left/Right MIC and left/right Mixer */
+	wm8960_write(codec, WM8960_POWER3, 0x3c);
+}
+
+static void wm8960_headset_event(void)
+{
+#if 0
+	int irq = gpio_headset_irq();
+#endif
+	if (gpio_headset_status()) {
+		if (!headset_detached) {
+			kobject_uevent(&mxc_headset.this_device->kobj, KOBJ_REMOVE);
+#if 0
+			set_irq_type(irq, IRQF_TRIGGER_FALLING);
+#endif
+			headset_attached = 0;
+			headset_detached = 1;
+		}
+	}
+	else {
+		if (!headset_attached) {
+			kobject_uevent(&mxc_headset.this_device->kobj, KOBJ_ADD);
+#if 0
+			set_irq_type(irq, IRQF_TRIGGER_RISING);	
+#endif
+			headset_attached = 1;
+			headset_detached = 0;
+		}
+	}
+};
 
 static int wm8960_set_dai_pll(struct snd_soc_dai *codec_dai,
 		int pll_id, unsigned int freq_in, unsigned int freq_out)
 {
 	struct snd_soc_codec *codec = codec_dai->codec;
 	u16 reg;
-	static struct _pll_div pll_div;
-	int ret;
+	int irq = gpio_headset_irq();
 
-	if (freq_in && freq_out) {
-		ret = pll_factors(freq_in, freq_out, &pll_div);
-		if (ret != 0)
-			return ret;
+	if (freq_in == 0 || freq_out == 0) {
+		return 0; /* Disable the PLL */
 	}
 
-	/* Disable the PLL: even if we are changing the frequency the
-	 * PLL needs to be disabled while we do so. */
-	wm8960_write(codec, WM8960_CLOCK1,
-		     wm8960_read(codec, WM8960_CLOCK1) & ~1);
-	wm8960_write(codec, WM8960_POWER2,
-		     wm8960_read(codec, WM8960_POWER2) & ~1);
+        /* 
+         *  Cancel any delayed work
+         */
+        cancel_delayed_work_sync(&wm8960_poweroff_wq);
+        
+        /* 
+         * Read the power status and if it is still on
+         * skip doing anything.
+         */
+        if (power_status_read()) {
+            return 0;
+        }
 
-	if (!freq_in || !freq_out)
-		return 0;
+	pll_factors(freq_out * 8, freq_in);
 
-	reg = wm8960_read(codec, WM8960_PLL1) & ~0x3f;
-	reg |= pll_div.pre_div << 4;
-	reg |= pll_div.n;
+	/* Configure PLLK1, PLLK2 and PLLN for sampling rates */
+	reg = wm8960_read_reg_cache(codec, WM8960_PLLN) & 0x1f0;
+	reg = reg | 0x20;
+	wm8960_write(codec, WM8960_PLLN, reg);
 
-	if (pll_div.k) {
-		reg |= 0x20;
+	if (pll_id == 0) {
+		/* 11.2896 MHz */
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLN) & 0x1f0;
+		reg = reg | 0x7;
+		wm8960_write(codec, WM8960_PLLN, reg);
 
-		wm8960_write(codec, WM8960_PLL2, (pll_div.k >> 18) & 0x3f);
-		wm8960_write(codec, WM8960_PLL3, (pll_div.k >> 9) & 0x1ff);
-		wm8960_write(codec, WM8960_PLL4, pll_div.k & 0x1ff);
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK3);
+		reg = reg & 0x100;
+		reg = reg | 0x26;
+		wm8960_write(codec, WM8960_PLLK3, reg);
+
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK2);
+		reg = reg & 0x100;
+		reg = reg | 0xC2;
+		wm8960_write(codec, WM8960_PLLK2, reg);
+
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK1);
+		reg = reg & 0x100;
+		reg = reg | 0x86;
+		wm8960_write(codec, WM8960_PLLK1, reg);		
 	}
-	wm8960_write(codec, WM8960_PLL1, reg);
+	else {
+		/* 12.288 MHz */
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLN) & 0x1f0;
+		reg = reg | 0x8;
+		wm8960_write(codec, WM8960_PLLN, reg);
 
-	/* Turn it on */
-	wm8960_write(codec, WM8960_POWER2,
-		     wm8960_read(codec, WM8960_POWER2) | 1);
-	msleep(250);
-	wm8960_write(codec, WM8960_CLOCK1,
-		     wm8960_read(codec, WM8960_CLOCK1) | 1);
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK3);
+		reg = reg & 0x100;
+		reg = reg | 0xE8;
+		wm8960_write(codec, WM8960_PLLK3, reg);
+
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK2);
+		reg = reg & 0x100;
+		reg = reg | 0x26;
+		wm8960_write(codec, WM8960_PLLK2, reg);
+
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLK1);
+		reg = reg & 0x100;
+		reg = reg | 0x31;
+		wm8960_write(codec, WM8960_PLLK1, reg);
+	}
+	wm8960_write(codec, WM8960_ADDCTL3,wm8960_read_reg_cache(codec, WM8960_ADDCTL3) | 0x8);
+
+	reg = wm8960_read_reg_cache(codec, WM8960_ADDCTL2);
+	reg |= HPSWPOLARITY;
+	reg |= 0x40; /* Headphone Switch Enable */
+        wm8960_write(codec, WM8960_ADDCTL2, reg);
+
+	/* ADLRC set */
+	wm8960_write(codec, WM8960_IFACE2,wm8960_read_reg_cache(codec, WM8960_IFACE2) | 0x40);
+	wm8960_write(codec, WM8960_ADDCTL1,wm8960_read_reg_cache(codec, WM8960_ADDCTL1) | 0x3);
+
+	/* Clear out MONOMIX 1 and 2 */
+	wm8960_write(codec, WM8960_MONOMIX1, 0x0);
+	wm8960_write(codec, WM8960_MONOMIX2, 0x0);
+
+	if (!wm8960_capture) {	
+		wm8960_write(codec, WM8960_CLASSD1, SPKR_CONFIG);
+		wm8960_write(codec, WM8960_CLASSD3, CLASSD3_CONFIG);
+	}
+
+	reg = wm8960_read_reg_cache(codec, WM8960_ADDCTL4);
+        /*
+         * HPSEL should be set to 10, GPIOSEL should be 001. This is needed
+         * for headset/speaker switching. JD2 is used for the switching
+         * in the codec
+         */
+        reg &= 0x1BB;
+        reg |= 0x8 | 0x10 | 0x21 | 0x2; /* GPIOSEL to be Jack detect output */
+        wm8960_write(codec, WM8960_ADDCTL4, reg);
+#if 0
+	disable_irq(irq);
+#endif
+	if (!wm8960_capture)
+                wm8960_power_on(1);
+
+	wm8960_headset_event();	
+
+#if 0
+	enable_irq(irq);
+#endif
 
 	return 0;
 }
 
-static int wm8960_set_dai_clkdiv(struct snd_soc_dai *codec_dai,
-		int div_id, int div)
+static int wm8960_set_dai_clkdiv(struct snd_soc_dai *codec_dai, int div_id,
+		unsigned int freq, int div)
 {
 	struct snd_soc_codec *codec = codec_dai->codec;
 	u16 reg;
 
 	switch (div_id) {
 	case WM8960_SYSCLKSEL:
-		reg = wm8960_read(codec, WM8960_CLOCK1) & 0x1fe;
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK1) & 0x1fe;
 		wm8960_write(codec, WM8960_CLOCK1, reg | div);
 		break;
 	case WM8960_SYSCLKDIV:
-		reg = wm8960_read(codec, WM8960_CLOCK1) & 0x1f9;
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK1) & 0x1f9;
 		wm8960_write(codec, WM8960_CLOCK1, reg | div);
 		break;
 	case WM8960_DACDIV:
-		reg = wm8960_read(codec, WM8960_CLOCK1) & 0x1c7;
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK1) & 0x1c7;
+		wm8960_write(codec, WM8960_CLOCK1, reg | div);
+		break;
+	case WM8960_ADCDIV:
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK1) & 0x03f;
 		wm8960_write(codec, WM8960_CLOCK1, reg | div);
 		break;
 	case WM8960_OPCLKDIV:
-		reg = wm8960_read(codec, WM8960_PLL1) & 0x03f;
-		wm8960_write(codec, WM8960_PLL1, reg | div);
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLN) & 0x03f;
+		wm8960_write(codec, WM8960_PLLN, reg | div);
+		break;
+	case WM8960_PRESCALEDIV:
+		reg = wm8960_read_reg_cache(codec, WM8960_PLLN) & 0x1EF;
+		wm8960_write(codec, WM8960_PLLN, reg | div);
 		break;
 	case WM8960_DCLKDIV:
-		reg = wm8960_read(codec, WM8960_CLOCK2) & 0x03f;
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK2) & 0x03f;
+		wm8960_write(codec, WM8960_CLOCK2, reg | div);
+		break;
+	case WM8960_BCLKDIV:
+		reg = wm8960_read_reg_cache(codec, WM8960_CLOCK2) & 0x1f0;
 		wm8960_write(codec, WM8960_CLOCK2, reg | div);
 		break;
 	case WM8960_TOCLKSEL:
-		reg = wm8960_read(codec, WM8960_ADDCTL1) & 0x1fd;
+		reg = wm8960_read_reg_cache(codec, WM8960_ADDCTL1) & 0x1fd;
 		wm8960_write(codec, WM8960_ADDCTL1, reg | div);
 		break;
 	default:
 		return -EINVAL;
 	}
-
 	return 0;
 }
 
-#define WM8960_RATES SNDRV_PCM_RATE_8000_48000
+#define WM8960_RATES \
+	(SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 | SNDRV_PCM_RATE_16000 | \
+	SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 | \
+	SNDRV_PCM_RATE_48000)
 
 #define WM8960_FORMATS \
 	(SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
 	SNDRV_PCM_FMTBIT_S24_LE)
 
+#define WM8960_CAPTURE_RATES		\
+	(SNDRV_PCM_RATE_8000	| 	\
+	 SNDRV_PCM_RATE_11025	| 	\
+	 SNDRV_PCM_RATE_16000	|	\
+	 SNDRV_PCM_RATE_22050	|	\
+	 SNDRV_PCM_RATE_32000	|	\
+	 SNDRV_PCM_RATE_44100	|	\
+	 SNDRV_PCM_RATE_48000)	
+
 static struct snd_soc_dai_ops wm8960_dai_ops = {
 	.hw_params = wm8960_hw_params,
-	.digital_mute = wm8960_mute,
-	.set_fmt = wm8960_set_dai_fmt,
 	.set_clkdiv = wm8960_set_dai_clkdiv,
+	.set_fmt = wm8960_set_dai_fmt,
 	.set_pll = wm8960_set_dai_pll,
+	.digital_mute = wm8960_mute,
 };
 
 struct snd_soc_dai wm8960_dai = {
@@ -705,22 +1192,93 @@ struct snd_soc_dai wm8960_dai = {
 		.stream_name = "Capture",
 		.channels_min = 1,
 		.channels_max = 2,
-		.rates = WM8960_RATES,
+		.rates = WM8960_CAPTURE_RATES,
 		.formats = WM8960_FORMATS,},
 	.ops = &wm8960_dai_ops,
 	.symmetric_rates = 1,
 };
 EXPORT_SYMBOL_GPL(wm8960_dai);
 
+/*!
+ * Set the bias level
+ */
+static int wm8960_set_bias_level(struct snd_soc_codec *codec,
+				enum snd_soc_bias_level level)
+{
+	u16 reg = 0;
+
+	switch (level) {
+	case SND_SOC_BIAS_ON:
+	case SND_SOC_BIAS_PREPARE:
+		/* Set VMID to 2x50k */
+		reg = snd_soc_read(codec, WM8960_POWER1);
+		reg &= ~0x181;
+		reg |= 0x80 | 0x40;
+		snd_soc_write(codec, WM8960_POWER1, reg);
+		break;
+
+	case SND_SOC_BIAS_OFF:
+	case SND_SOC_BIAS_STANDBY:
+		/* Enable anti-pop features */
+		snd_soc_write(codec, WM8960_APOP1,
+			     WM8960_POBCTRL | WM8960_SOFT_ST |
+			     WM8960_BUFDCOPEN | WM8960_BUFIOEN);
+
+		/* Discharge HP output */
+		reg = WM8960_DISOP;
+		snd_soc_write(codec, WM8960_APOP2, reg);
+
+		msleep(400);
+
+		snd_soc_write(codec, WM8960_APOP2, 0);
+
+		/* Enable & ramp VMID at 2x50k */
+		reg = snd_soc_read(codec, WM8960_POWER1);
+		reg |= 0x80;
+		snd_soc_write(codec, WM8960_POWER1, reg);
+		msleep(100);
+
+		/* Enable VREF */
+		snd_soc_write(codec, WM8960_POWER1, reg | WM8960_VREF);
+
+		/* Disable anti-pop features */
+		snd_soc_write(codec, WM8960_APOP1, WM8960_BUFIOEN);
+
+		/* Set VMID to 2x250k */
+		reg = snd_soc_read(codec, WM8960_POWER1);
+		reg &= ~0x180;
+		reg |= 0x100;
+		snd_soc_write(codec, WM8960_POWER1, reg);
+
+		break;
+	}
+
+	return 0;
+}
+
+/*!
+ * Suspend the codec
+ */
 static int wm8960_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
 	struct snd_soc_codec *codec = socdev->card->codec;
 
+	/*
+	 * Turn off the power to the codec components
+	 */
+	wm8960_write(codec, WM8960_POWER1, 0x1);
+	wm8960_write(codec, WM8960_POWER2, 0x0);
+	wm8960_write(codec, WM8960_POWER3, 0x0);
+
 	wm8960_set_bias_level(codec, SND_SOC_BIAS_OFF);
+
 	return 0;
 }
 
+/*!
+ * Resume the codec blocks
+ */
 static int wm8960_resume(struct platform_device *pdev)
 {
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
@@ -738,39 +1296,54 @@ static int wm8960_resume(struct platform_device *pdev)
 
 	wm8960_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 	wm8960_set_bias_level(codec, codec->suspend_bias_level);
+
+	wm8960_reset(codec);
 	return 0;
 }
-
-static struct snd_soc_codec *wm8960_codec;
 
 static int wm8960_probe(struct platform_device *pdev)
 {
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
 	struct snd_soc_codec *codec;
 	int ret = 0;
+	int error = 0;
 
 	if (wm8960_codec == NULL) {
 		dev_err(&pdev->dev, "Codec device not registered\n");
 		return -ENODEV;
 	}
-
+	
 	socdev->card->codec = wm8960_codec;
 	codec = wm8960_codec;
-
+	
 	/* register pcms */
 	ret = snd_soc_new_pcms(socdev, SNDRV_DEFAULT_IDX1, SNDRV_DEFAULT_STR1);
 	if (ret < 0) {
 		dev_err(codec->dev, "failed to create pcms: %d\n", ret);
 		goto pcm_err;
 	}
-
+	
 	snd_soc_add_controls(codec, wm8960_snd_controls,
-			     ARRAY_SIZE(wm8960_snd_controls));
+	                     ARRAY_SIZE(wm8960_snd_controls));
+
 	wm8960_add_widgets(codec);
+
 	ret = snd_soc_init_card(socdev);
 	if (ret < 0) {
 		dev_err(codec->dev, "failed to register card: %d\n", ret);
 		goto card_err;
+	}
+
+	error = sysdev_class_register(&audio_wm8960_sysclass);
+	if (!error)
+		error = sysdev_register(&audio_wm8960_device);
+	if (!error) {
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_regoff);
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_regval);
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_headset_status);
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_power_status);
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_codec_mute);
+		error = sysdev_create_file(&audio_wm8960_device, &attr_wm8960_power_off_timeout);
 	}
 
 	return ret;
@@ -790,23 +1363,103 @@ static int wm8960_remove(struct platform_device *pdev)
 	snd_soc_free_pcms(socdev);
 	snd_soc_dapm_free(socdev);
 
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_regoff);
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_regval);
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_headset_status);
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_power_status);
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_codec_mute);
+	sysdev_remove_file(&audio_wm8960_device, &attr_wm8960_power_off_timeout);
+
+	sysdev_unregister(&audio_wm8960_device);
+	sysdev_class_unregister(&audio_wm8960_sysclass);
+
 	return 0;
 }
 
 struct snd_soc_codec_device soc_codec_dev_wm8960 = {
-	.probe = 	wm8960_probe,
-	.remove = 	wm8960_remove,
-	.suspend = 	wm8960_suspend,
-	.resume =	wm8960_resume,
+	.probe =        wm8960_probe,
+	.remove =       wm8960_remove,
+	.suspend =      wm8960_suspend,
+	.resume =       wm8960_resume,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_wm8960);
 
+static void wm8960_reinit(struct snd_soc_codec *codec)
+{
+	unsigned int reg;
+
+	/* 
+	 * Do we need to reset codec?
+	 *	wm8960_reset(codec);
+	 */
+	reg = wm8960_read_reg_cache(codec, WM8960_LINVOL);
+	wm8960_write(codec, WM8960_LINVOL, reg & 0x017F);
+
+	reg = wm8960_read_reg_cache(codec, WM8960_RINVOL);
+	wm8960_write(codec, WM8960_RINVOL, reg & 0x017F);
+
+	reg = wm8960_read_reg_cache(codec, WM8960_ADDCTL2);
+}
+
+static void wm8960_headset_mute(int mute)
+{
+	u16 mute_reg = wm8960_read_reg_cache(wm8960_codec, WM8960_DACCTL1) & 0xfff7;
+
+	if (mute)
+		wm8960_write(wm8960_codec, WM8960_DACCTL1, mute_reg | 0x8);
+	else
+		wm8960_write(wm8960_codec, WM8960_DACCTL1, mute_reg);
+}
+
+#if 0	
+static void do_hsdet_work(struct work_struct *dummy)
+{
+	int irq = gpio_headset_irq();
+
+	/* Get the headset IRQ */
+	wm8960_headset_event();
+
+	/* Unmute */
+	wm8960_headset_mute(0);
+
+	enable_irq(irq);
+}
+
+static DECLARE_DELAYED_WORK(hsdet_work, do_hsdet_work);
+
+static void do_hsdet_mute_work(struct work_struct *dummy)
+{
+	wm8960_headset_mute(1);
+
+	/* Debounce for headset detection */
+	schedule_delayed_work(&hsdet_work, msecs_to_jiffies(HSDET_THRESHOLD));
+}
+	
+static DECLARE_WORK(hsdet_mute_work, do_hsdet_mute_work);
+
+static irqreturn_t headset_detect_irq(int irq, void *devid)
+{
+	disable_irq(irq);
+
+	/* Mute */
+	schedule_work(&hsdet_mute_work);
+
+	return IRQ_HANDLED;
+}
+#endif
+
+/*
+ * initialise the WM8960 driver
+ * register the mixer and dsp interfaces with the kernel
+ */
 static int wm8960_register(struct wm8960_priv *wm8960)
 {
 	struct wm8960_data *pdata = wm8960->codec.dev->platform_data;
 	struct snd_soc_codec *codec = &wm8960->codec;
 	int ret;
 	u16 reg;
+	int err = 0;
+	int irq = gpio_headset_irq();	
 
 	if (wm8960_codec) {
 		dev_err(codec->dev, "Another WM8960 is registered\n");
@@ -826,14 +1479,13 @@ static int wm8960_register(struct wm8960_priv *wm8960)
 	INIT_LIST_HEAD(&codec->dapm_widgets);
 	INIT_LIST_HEAD(&codec->dapm_paths);
 
-	codec->private_data = wm8960;
 	codec->name = "WM8960";
 	codec->owner = THIS_MODULE;
 	codec->read = wm8960_read_reg_cache;
 	codec->write = wm8960_write;
 	codec->bias_level = SND_SOC_BIAS_OFF;
-	codec->set_bias_level = wm8960_set_bias_level;
 	codec->dai = &wm8960_dai;
+	codec->set_bias_level = wm8960_set_bias_level;
 	codec->num_dai = 1;
 	codec->reg_cache_size = WM8960_CACHEREGNUM;
 	codec->reg_cache = &wm8960->reg_cache;
@@ -843,56 +1495,152 @@ static int wm8960_register(struct wm8960_priv *wm8960)
 	ret = wm8960_reset(codec);
 	if (ret < 0) {
 		dev_err(codec->dev, "Failed to issue reset\n");
-		return ret;
+		goto err;
 	}
 
 	wm8960_dai.dev = codec->dev;
 
-	wm8960_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
+	codec->set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
 	/* Latch the update bits */
-	reg = wm8960_read(codec, WM8960_LINVOL);
-	wm8960_write(codec, WM8960_LINVOL, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_RINVOL);
-	wm8960_write(codec, WM8960_RINVOL, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_LADC);
-	wm8960_write(codec, WM8960_LADC, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_RADC);
-	wm8960_write(codec, WM8960_RADC, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_LDAC);
-	wm8960_write(codec, WM8960_LDAC, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_RDAC);
-	wm8960_write(codec, WM8960_RDAC, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_LOUT1);
-	wm8960_write(codec, WM8960_LOUT1, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_ROUT1);
-	wm8960_write(codec, WM8960_ROUT1, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_LOUT2);
-	wm8960_write(codec, WM8960_LOUT2, reg | 0x100);
-	reg = wm8960_read(codec, WM8960_ROUT2);
-	wm8960_write(codec, WM8960_ROUT2, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_LINVOL);
+	snd_soc_write(codec, WM8960_LINVOL, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_RINVOL);
+	snd_soc_write(codec, WM8960_RINVOL, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_LADC);
+	snd_soc_write(codec, WM8960_LADC, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_RADC);
+	snd_soc_write(codec, WM8960_RADC, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_LDAC);
+	snd_soc_write(codec, WM8960_LDAC, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_RDAC);
+	snd_soc_write(codec, WM8960_RDAC, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_LOUT1);
+	snd_soc_write(codec, WM8960_LOUT1, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_ROUT1);
+	snd_soc_write(codec, WM8960_ROUT1, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_LOUT2);
+	snd_soc_write(codec, WM8960_LOUT2, reg | 0x100);
+	reg = snd_soc_read(codec, WM8960_ROUT2);
+	snd_soc_write(codec, WM8960_ROUT2, reg | 0x100);
 
 	wm8960_codec = codec;
 
 	ret = snd_soc_register_codec(codec);
 	if (ret != 0) {
 		dev_err(codec->dev, "Failed to register codec: %d\n", ret);
-		return ret;
+		goto err;
 	}
 
 	ret = snd_soc_register_dai(&wm8960_dai);
 	if (ret != 0) {
 		dev_err(codec->dev, "Failed to register DAI: %d\n", ret);
-		snd_soc_unregister_codec(codec);
-		return ret;
+		goto err_codec;
 	}
+
+#if 0
+	err = request_irq(irq, headset_detect_irq, 0, "HS_det", NULL);	
+	if (err != 0) {
+		printk(KERN_ERR "IRQF_DISABLED: Could not get IRQ %d\n", irq);
+		return err;
+	}
+#endif
+
+	wm8960_power_on_startup(0);
+
+	if (misc_register(&mxc_headset)) {
+		printk (KERN_WARNING "mxc_headset: Couldn't register device %d\n", HEADSET_MINOR);
+		return -EBUSY;
+	}
+	return ret;
+
+err_codec:
+	snd_soc_unregister_codec(codec);
+err:
+	kfree(codec->reg_cache);
+	return ret;
+}
+
+#ifdef CONFIG_DEBUG_FS
+
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+
+struct dentry *wm8960_debugfs_root;
+struct dentry *wm8960_debugfs_state;
+
+static int wm8960_debugfs_show(struct seq_file *s, void *p)
+{
+	int t;
+	int i = 0;
+	u16 *cache = wm8960_codec->reg_cache;
+
+	for (i=0; i < WM8960_CACHEREGNUM; i++) {
+		t += seq_printf(s, "Register %d - Value:0x%x\n", i, cache[i]);
+	}
+
+        if (gpio_headset_status())
+		t += seq_printf(s, "wm8960: Headset not plugged in\n");
+	else
+		t += seq_printf(s, "wm8960: Headset plugged in\n");
+
+	t += seq_printf(s, "WM8960_RATES: 0x%x\n", WM8960_RATES);
+	t += seq_printf(s, "WM8960_CAPTURE_RATES: 0x%x\n", WM8960_CAPTURE_RATES);
 
 	return 0;
 }
 
+static int wm8960_debugfs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, wm8960_debugfs_show, inode->i_private);
+}
+
+static const struct file_operations wm8960_debugfs_fops = {
+	.owner		= THIS_MODULE,
+	.open		= wm8960_debugfs_open,
+	.llseek		= seq_lseek,
+	.read		= seq_read,
+	.release	= single_release,
+};
+
+static int wm8960_debugfs_init(void)
+{
+	struct dentry *root, *state;
+	int ret = -1;
+
+	root = debugfs_create_dir("WM8960_Sound", NULL);
+	if (IS_ERR(root) || !root)
+		goto err_root;
+
+	state = debugfs_create_file("WM8960_Codec_Settings", 0400, root, (void *)0,
+				&wm8960_debugfs_fops);
+
+	if (!state)
+		goto err_state;
+
+	wm8960_debugfs_root = root;
+	wm8960_debugfs_state = state;
+	return 0;
+err_state:
+	debugfs_remove(root);
+err_root:
+	printk(KERN_ERR "WM8960_Sound: debugfs is not available\n");
+	return ret;
+}
+
+static void wm8960_debugfs_cleanup(void)
+{
+	debugfs_remove(wm8960_debugfs_state);
+	debugfs_remove(wm8960_debugfs_root);
+	wm8960_debugfs_state = NULL;
+	wm8960_debugfs_root = NULL;
+}
+
+#endif /* CONFIG_DEBUG_FS */
+	
 static void wm8960_unregister(struct wm8960_priv *wm8960)
 {
-	wm8960_set_bias_level(&wm8960->codec, SND_SOC_BIAS_OFF);
+	wm8960->codec.set_bias_level(&wm8960->codec, SND_SOC_BIAS_OFF);
 	snd_soc_unregister_dai(&wm8960_dai);
 	snd_soc_unregister_codec(&wm8960->codec);
 	kfree(wm8960);
@@ -935,7 +1683,7 @@ MODULE_DEVICE_TABLE(i2c, wm8960_i2c_id);
 
 static struct i2c_driver wm8960_i2c_driver = {
 	.driver = {
-		.name = "WM8960 I2C Codec",
+		.name = "wm8960",
 		.owner = THIS_MODULE,
 	},
 	.probe =    wm8960_i2c_probe,
@@ -963,7 +1711,6 @@ static void __exit wm8960_exit(void)
 }
 module_exit(wm8960_exit);
 
-
 MODULE_DESCRIPTION("ASoC WM8960 driver");
-MODULE_AUTHOR("Liam Girdwood");
+MODULE_AUTHOR("Manish Lachwani");
 MODULE_LICENSE("GPL");

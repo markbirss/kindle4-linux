@@ -428,7 +428,6 @@ typedef struct {
 	bool half_current;	/*! < tcled half current */
 } t_tcled_ind_param;
 
-#if defined(CONFIG_MXC_PMIC_MC13892)
 
 enum curr_level {
 	LIT_CURR_0 = 0,
@@ -459,7 +458,6 @@ enum lit_channel {
 	LIT_BLUE,
 };
 
-#endif
 
 /* EXPORTED FUNCTIONS */
 #ifdef __KERNEL__
@@ -1077,6 +1075,22 @@ PMIC_STATUS mc13892_bklit_get_blink_p(enum lit_channel channel, int *period);
 
 #endif
 
+#if defined(CONFIG_MXC_PMIC_MC34708)
+
+PMIC_STATUS mc34708_bklit_set_current(enum lit_channel channel,
+				      unsigned char level);
+PMIC_STATUS mc34708_bklit_get_current(enum lit_channel channel,
+				      unsigned char *level);
+PMIC_STATUS mc34708_bklit_set_dutycycle(enum lit_channel channel,
+					unsigned char dc);
+PMIC_STATUS mc34708_bklit_get_dutycycle(enum lit_channel channel,
+					unsigned char *dc);
+PMIC_STATUS mc34708_bklit_set_ramp(enum lit_channel channel, int flag);
+PMIC_STATUS mc34708_bklit_get_ramp(enum lit_channel channel, int *flag);
+PMIC_STATUS mc34708_bklit_set_blink_p(enum lit_channel channel, int period);
+PMIC_STATUS mc34708_bklit_get_blink_p(enum lit_channel channel, int *period);
+
+#endif
 #endif				/* __KERNEL__ */
 
 #endif				/* __ASM_ARCH_MXC_PMIC_LIGHT_H__ */

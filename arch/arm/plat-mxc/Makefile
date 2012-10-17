@@ -13,7 +13,9 @@ obj-$(CONFIG_ARCH_MXC_IOMUX_V3) += iomux-v3.o
 obj-$(CONFIG_MXC_PWM)  += pwm.o
 
 ifneq ($(CONFIG_ARCH_MX27),y)
+ifeq ($(CONFIG_MXC_SDMA_API),y)
 obj-y += sdma/
+endif
 endif
 
 ifeq ($(CONFIG_MXC_TZIC),y)
@@ -43,3 +45,7 @@ obj-$(CONFIG_MC13783_MXC) += mc13783_xc.o
 obj-$(CONFIG_UTMI_MXC) += utmixc.o
 obj-$(CONFIG_USB) += serialxc.o
 
+# ZQ calibration
+obj-$(CONFIG_MXC_ZQ_CALIBRATION) += zq_calib.o
+
+obj-$(CONFIG_CPU_IDLE)	+= cpuidle.o

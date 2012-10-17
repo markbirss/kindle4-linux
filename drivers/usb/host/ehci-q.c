@@ -211,6 +211,7 @@ static int qtd_copy_status (
 
 	/* serious "can't proceed" faults reported by the hardware */
 	if (token & QTD_STS_HALT) {
+		dev_err (ehci_to_hcd(ehci)->self.controller , "QTD_STS_HALT with token %x\n" , token);
 		if (token & QTD_STS_BABBLE) {
 			/* FIXME "must" disable babbling device's port too */
 			status = -EOVERFLOW;

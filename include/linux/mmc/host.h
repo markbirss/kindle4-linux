@@ -42,6 +42,7 @@ struct mmc_ios {
 #define MMC_BUS_WIDTH_1		0
 #define MMC_BUS_WIDTH_4		2
 #define MMC_BUS_WIDTH_8		3
+#define MMC_BUS_WIDTH_DDR	8
 
 	unsigned char	timing;			/* timing specification used */
 
@@ -110,6 +111,8 @@ struct mmc_host {
 #define MMC_VDD_35_36		0x00800000	/* VDD voltage 3.5 ~ 3.6 */
 
 	unsigned long		caps;		/* Host capabilities */
+	int 			ddr;		/* Does it support DDR mode? */
+	int			predefined;	/* Does it support PREDEFINED mode? */
 
 #define MMC_CAP_4_BIT_DATA	(1 << 0)	/* Can the host do 4 bit transfers */
 #define MMC_CAP_MMC_HIGHSPEED	(1 << 1)	/* Can do MMC high-speed timing */
@@ -118,6 +121,7 @@ struct mmc_host {
 #define MMC_CAP_SPI		(1 << 4)	/* Talks only SPI protocols */
 #define MMC_CAP_NEEDS_POLL	(1 << 5)	/* Needs polling for card-detection */
 #define MMC_CAP_8_BIT_DATA	(1 << 6)	/* Can the host do 8 bit transfers */
+#define MMC_CAP_DATA_DDR	(1 << 7)	/* Can the host do ddr transfers */
 
 	/* host specific block data */
 	unsigned int		max_seg_size;	/* see blk_queue_max_segment_size */

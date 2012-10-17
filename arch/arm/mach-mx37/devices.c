@@ -661,11 +661,11 @@ struct mxc_dvfs_platform_data dvfs_core_data = {
 	.reg_id = "SW1",
 	.clk1_id = "cpu_clk",
 	.clk2_id = "gpc_dvfs_clk",
-	.gpc_cntr_reg_addr = MXC_GPC_CNTR,
-	.gpc_vcr_reg_addr = MXC_GPC_VCR,
-	.ccm_cdcr_reg_addr = MXC_CCM_CDCR,
-	.ccm_cacrr_reg_addr = MXC_CCM_CACRR,
-	.ccm_cdhipr_reg_addr = MXC_CCM_CDHIPR,
+	.gpc_cntr_offset = MXC_GPC_CNTR_OFFSET,
+	.gpc_vcr_offset = MXC_GPC_VCR_OFFSET,
+	.ccm_cdcr_offset = MXC_CCM_CDCR_OFFSET,
+	.ccm_cacrr_offset = MXC_CCM_CACRR_OFFSET,
+	.ccm_cdhipr_offset = MXC_CCM_CDHIPR_OFFSET,
 	.prediv_mask = 0x3800,
 	.prediv_offset = 11,
 	.prediv_val = 1,
@@ -1168,6 +1168,22 @@ static inline void mxc_init_ssi(void)
 }
 #endif /* CONFIG_SND_MXC_SOC_SSI */
 
+static struct platform_device mxc_v4l2_device = {
+	.name = "mxc_v4l2_capture",
+	.id = 0,
+};
+
+static struct platform_device mxc_v4l2out_device = {
+	.name = "mxc_v4l2_output",
+	.id = 0,
+};
+
+static inline void mxc_init_v4l2()
+{
+	platform_device_register(&mxc_v4l2_device);
+	platform_device_register(&mxc_v4l2out_device);
+}
+
 int __init mxc_init_devices(void)
 {
 	mxc_init_wdt();
@@ -1189,6 +1205,7 @@ int __init mxc_init_devices(void)
 	mxc_init_rngc();
 	mxc_init_iim();
 	mxc_init_ssi();
+	mxc_init_v4l2();
 
 	return 0;
 }

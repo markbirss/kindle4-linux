@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2010 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright 2004-2011 Freescale Semiconductor, Inc. All Rights Reserved.
  */
 
 /*
@@ -66,17 +66,39 @@ struct mxcfb_rect {
 };
 
 #define GRAYSCALE_8BIT				0x1
-#define GRAYSCALE_8BIT_INVERTED		0x2
+#define GRAYSCALE_8BIT_INVERTED			0x2
 
 #define AUTO_UPDATE_MODE_REGION_MODE		0
-#define AUTO_UPDATE_MODE_AUTOMATIC_MODE	1
+#define AUTO_UPDATE_MODE_AUTOMATIC_MODE		1
+#define AUTO_UPDATE_MODE_AUTOMATIC_MODE_FULL	AUTO_UPDATE_MODE_AUTOMATIC_MODE /* Lab126 */
+#define AUTO_UPDATE_MODE_AUTOMATIC_MODE_PART	2 /* Lab126 */
+
+#define UPDATE_SCHEME_SNAPSHOT			0
+#define UPDATE_SCHEME_QUEUE			1
+#define UPDATE_SCHEME_QUEUE_AND_MERGE		2
 
 #define UPDATE_MODE_PARTIAL			0x0
 #define UPDATE_MODE_FULL			0x1
 
+#define WAVEFORM_MODE_INIT	0x0	/* Screen goes to white (clears) */
+#define WAVEFORM_MODE_DU	0x1	/* Grey->white/grey->black */
+#define WAVEFORM_MODE_GC16	0x2	/* High fidelity (flashing) */
+#define WAVEFORM_MODE_GC16_FAST 0x3 /* Medium fidelity. Text to Text */
+#define WAVEFORM_MODE_GC4	0x3	/* Lower fidelity */
+#define WAVEFORM_MODE_A2	0x4	/* Faster but even lower fidelity */
+#define WAVEFORM_MODE_GL16	0x5	/* High fidelity from white transition */
+#define WAVEFORM_MODE_GL16_FAST 0x6 /* Medium fidelity. Text to Text */
+
 #define WAVEFORM_MODE_AUTO			257
 
 #define TEMP_USE_AMBIENT			0x1000
+#define TEMP_USE_PAPYRUS			0X1001
+
+#define EPDC_FLAG_ENABLE_INVERSION		0x01
+#define EPDC_FLAG_FORCE_MONOCHROME		0x02
+#define EPDC_FLAG_USE_ALT_BUFFER		0x100
+
+#define FB_POWERDOWN_DISABLE			-1
 
 struct mxcfb_alt_buffer_data {
 	__u32 phys_addr;
@@ -91,7 +113,7 @@ struct mxcfb_update_data {
 	__u32 update_mode;
 	__u32 update_marker;
 	int temp;
-	int use_alt_buffer;
+	uint flags;
 	struct mxcfb_alt_buffer_data alt_buffer_data;
 };
 
@@ -105,7 +127,11 @@ struct mxcfb_waveform_modes {
 	int mode_gc4;
 	int mode_gc8;
 	int mode_gc16;
+	int mode_gc16_fast;
 	int mode_gc32;
+	int mode_gl16;
+	int mode_gl16_fast;
+	int mode_a2;
 };
 
 #define MXCFB_WAIT_FOR_VSYNC	_IOW('F', 0x20, u_int32_t)
@@ -118,13 +144,22 @@ struct mxcfb_waveform_modes {
 #define MXCFB_SET_GAMMA	       _IOW('F', 0x28, struct mxcfb_gamma)
 #define MXCFB_GET_FB_IPU_DI 	_IOR('F', 0x29, u_int32_t)
 #define MXCFB_GET_DIFMT	       _IOR('F', 0x2A, u_int32_t)
+#define MXCFB_GET_FB_BLANK     _IOR('F', 0x2B, u_int32_t)
+#define MXCFB_SET_DIFMT		_IOW('F', 0x2C, u_int32_t)
 
 /* IOCTLs for E-ink panel updates */
 #define MXCFB_SET_WAVEFORM_MODES	_IOW('F', 0x2B, struct mxcfb_waveform_modes)
 #define MXCFB_SET_TEMPERATURE		_IOW('F', 0x2C, int32_t)
 #define MXCFB_SET_AUTO_UPDATE_MODE	_IOW('F', 0x2D, __u32)
-#define MXCFB_SEND_UPDATE			_IOW('F', 0x2E, struct mxcfb_update_data)
+#define MXCFB_SEND_UPDATE		_IOW('F', 0x2E, struct mxcfb_update_data)
 #define MXCFB_WAIT_FOR_UPDATE_COMPLETE	_IOW('F', 0x2F, __u32)
+#define MXCFB_SET_PWRDOWN_DELAY		_IOW('F', 0x30, int32_t)
+#define MXCFB_GET_PWRDOWN_DELAY		_IOR('F', 0x31, int32_t)
+#define MXCFB_SET_UPDATE_SCHEME		_IOW('F', 0x32, __u32)
+#define MXCFB_SET_PAUSE			_IOW('F', 0x33, __u32)
+#define MXCFB_GET_PAUSE			_IOW('F', 0x34, __u32)
+#define MXCFB_SET_RESUME		_IOW('F', 0x35, __u32)
+#define MXCFB_CLEAR_UPDATE_QUEUE	_IOW('F', 0x36, __u32)
 
 #ifdef __KERNEL__
 
@@ -140,5 +175,6 @@ enum {
 int mxcfb_set_refresh_mode(struct fb_info *fbi, int mode,
 			   struct mxcfb_rect *update_region);
 
+int mxc_elcdif_frame_addr_setup(dma_addr_t phys);
 #endif				/* __KERNEL__ */
 #endif

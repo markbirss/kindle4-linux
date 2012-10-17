@@ -745,6 +745,13 @@ config RTC_MC13892
 	help
 	  Support for Freescale MC13892 RTC
 
+config RTC_MC34708
+	tristate "Freescale MC34708 Real Time Clock"
+	depends on ARCH_MXC && MXC_PMIC_MC34708
+	depends on RTC_CLASS
+	help
+	  Support for Freescale MC34708 RTC
+
 config RTC_DRV_STMP3XXX
 	tristate "Sigmatel STMP3xxx series SoC RTC"
 	depends on ARCH_STMP3XXX && RTC_CLASS

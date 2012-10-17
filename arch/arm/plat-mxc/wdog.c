@@ -54,15 +54,3 @@ static void __iomem *wdog_base[2] = {
 #endif
 };
 
-void mxc_wd_reset(void)
-{
-	u16 reg;
-	struct clk *clk;
-
-	clk = clk_get(NULL, "wdog_clk");
-	clk_enable(clk);
-
-	reg = __raw_readw(wdog_base[0] + WDOG_WCR) & ~WCR_SRS_BIT;
-	reg |= WCR_WDE_BIT;
-	__raw_writew(reg, wdog_base[0] + WDOG_WCR);
-}

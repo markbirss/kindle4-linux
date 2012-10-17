@@ -271,6 +271,10 @@ int usbotg_init(struct platform_device *pdev)
 			xops->init(xops);
 		usb_phy_enable(pdata);
 	}
+	/* Enable internal Phy clock */
+	tmp = __raw_readl(pdata->regs + UOG_PORTSC1);
+	tmp &= ~PORTSC_PHCD;
+	__raw_writel(tmp, pdata->regs + UOG_PORTSC1);
 
 	if (pdata->operating_mode == FSL_USB2_DR_HOST) {
 		/* enable FS/LS device */
@@ -288,10 +292,21 @@ EXPORT_SYMBOL(usbotg_init);
 
 void usbotg_uninit(struct fsl_usb2_platform_data *pdata)
 {
+	int tmp;
+	struct clk *usb_clk;
 	pr_debug("%s\n", __func__);
 
 	if (pdata->xcvr_ops && pdata->xcvr_ops->uninit)
 		pdata->xcvr_ops->uninit(pdata->xcvr_ops);
+
+	/* Disable internal Phy clock */
+	tmp = __raw_readl(pdata->regs + UOG_PORTSC1);
+	tmp |= PORTSC_PHCD;
+	__raw_writel(tmp, pdata->regs + UOG_PORTSC1);
+
+	usb_clk = clk_get(NULL, "usb_clk0");
+	clk_disable(usb_clk);
+	clk_put(usb_clk);
 
 	pdata->regs = NULL;
 	otg_used--;
@@ -331,10 +346,15 @@ EXPORT_SYMBOL(fsl_usb_host_init);
 
 void fsl_usb_host_uninit(struct fsl_usb2_platform_data *pdata)
 {
+	struct clk *usb_clk;
 	pr_debug("%s\n", __func__);
 
 	if (pdata->xcvr_ops && pdata->xcvr_ops->uninit)
 		pdata->xcvr_ops->uninit(pdata->xcvr_ops);
+
+	usb_clk = clk_get(NULL, "usb_clk1");
+	clk_disable(usb_clk);
+	clk_put(usb_clk);
 
 	pdata->regs = NULL;
 }

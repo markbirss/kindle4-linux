@@ -20,6 +20,7 @@
 
 #include <linux/pmic_adc.h>
 #include <linux/pmic_status.h>
+#include <mach/pmic_power.h>
 
 #include "../core/pmic.h"
 
@@ -64,7 +65,7 @@
 #define ADC_DELAY_MASK          0x07F800
 #define ADC_ATO                 0x080000
 #define ASC_ADC                 0x100000
-#define ADC_WAIT_TSI_1		0x200001
+#define ADC_WAIT_TSI_1		0x300001
 #define ADC_NO_ADTRIG           0x200000
 
 /*
@@ -83,7 +84,6 @@
 #define ADC_MODE_MASK           0x00003F
 
 #define ADC_INT_BISDONEI        0x02
-#define ADC_TSMODE_MASK 0x007000
 
 typedef enum adc_state {
 	ADC_FREE,
@@ -162,8 +162,6 @@ PMIC_STATUS mc13892_adc_read_ts(t_touch_screen *touch_sample, int wait_tsi);
 
 /* internal function */
 static void callback_tsi(void *);
-static void callback_adcdone(void *);
-static void callback_adcbisdone(void *);
 
 static int swait;
 
@@ -184,15 +182,13 @@ static DECLARE_COMPLETION(adcdone_it);
 static DECLARE_COMPLETION(adcbisdone_it);
 static DECLARE_COMPLETION(adc_tsi);
 static pmic_event_callback_t tsi_event;
-static pmic_event_callback_t event_adc;
-static pmic_event_callback_t event_adc_bis;
 static bool data_ready_adc_1;
 static bool data_ready_adc_2;
 static bool adc_ts;
 static bool wait_ts;
 static bool monitor_en;
 static bool monitor_adc;
-static DECLARE_MUTEX(convert_mutex);
+static struct semaphore convert_mutex;
 
 static DECLARE_WAIT_QUEUE_HEAD(queue_adc_busy);
 static t_adc_state adc_dev[2];
@@ -249,13 +245,10 @@ static int pmic_adc_suspend(struct platform_device *pdev, pm_message_t state)
 static int pmic_adc_resume(struct platform_device *pdev)
 {
 	/* nothing for mc13892 adc */
-	unsigned int adc_0_reg, adc_1_reg, reg_mask;
+	unsigned int adc_1_reg;
 	suspend_flag = 0;
 
 	/* let interrupt of TSI again */
-	adc_0_reg = ADC_WAIT_TSI_0;
-	reg_mask = ADC_WAIT_TSI_0;
-	CHECK_ERROR(pmic_write_reg(REG_ADC0, adc_0_reg, reg_mask));
 	adc_1_reg = ADC_WAIT_TSI_1 | (ADC_BIS * adc_ts);
 	CHECK_ERROR(pmic_write_reg(REG_ADC1, adc_1_reg, PMIC_ALL_BITS));
 
@@ -274,19 +267,6 @@ static void callback_tsi(void *unused)
 		complete(&adc_tsi);
 		pmic_event_mask(EVENT_TSI);
 	}
-}
-
-static void callback_adcdone(void *unused)
-{
-	if (data_ready_adc_1)
-		complete(&adcdone_it);
-}
-
-static void callback_adcbisdone(void *unused)
-{
-	pr_debug("* adcdone bis it callback *\n");
-	if (data_ready_adc_2)
-		complete(&adcbisdone_it);
 }
 
 static int pmic_adc_filter(t_touch_screen *ts_curr)
@@ -345,16 +325,6 @@ int pmic_adc_init(void)
 	monitor_en = false;
 	monitor_adc = false;
 
-	/* sub to ADCDone IT */
-	event_adc.param = NULL;
-	event_adc.func = callback_adcdone;
-	CHECK_ERROR(pmic_event_subscribe(EVENT_ADCDONEI, event_adc));
-
-	/* sub to ADCDoneBis IT */
-	event_adc_bis.param = NULL;
-	event_adc_bis.func = callback_adcbisdone;
-	CHECK_ERROR(pmic_event_subscribe(EVENT_ADCBISDONEI, event_adc_bis));
-
 	/* sub to Touch Screen IT */
 	tsi_event.param = NULL;
 	tsi_event.func = callback_tsi;
@@ -365,8 +335,6 @@ int pmic_adc_init(void)
 
 PMIC_STATUS pmic_adc_deinit(void)
 {
-	CHECK_ERROR(pmic_event_unsubscribe(EVENT_ADCDONEI, event_adc));
-	CHECK_ERROR(pmic_event_unsubscribe(EVENT_ADCBISDONEI, event_adc_bis));
 	CHECK_ERROR(pmic_event_unsubscribe(EVENT_TSI, tsi_event));
 
 	return PMIC_SUCCESS;
@@ -400,6 +368,8 @@ int mc13892_adc_init_param(t_adc_param * adc_param)
 PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 {
 	bool use_bis = false;
+	int retry_counter = 0;
+	unsigned int status0;
 	unsigned int adc_0_reg = 0, adc_1_reg = 0, reg_1 = 0, result_reg =
 	    0, i = 0;
 	unsigned int result = 0, temp = 0;
@@ -426,7 +396,8 @@ PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 		wait_for_completion_interruptible(&adc_tsi);
 		wait_ts = false;
 	}
-	down(&convert_mutex);
+	if (adc_param->read_ts == false)
+		down(&convert_mutex);
 	use_bis = mc13892_adc_request(adc_param->read_ts);
 	if (use_bis < 0) {
 		pr_debug("process has received a signal and got interrupted\n");
@@ -498,7 +469,19 @@ PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 					   ADC_NO_ADTRIG | ADC_EN |
 					   ADC_DELAY_MASK | ASC_ADC | ADC_BIS));
 		pr_debug("wait adc done \n");
-		wait_for_completion_interruptible(&adcdone_it);
+		pmic_read(REG_INT_STATUS0, &status0);
+		for (retry_counter=0; retry_counter<=10; retry_counter++) {
+			if (status0 & 1)
+				break;
+			pmic_read(REG_INT_STATUS0, &status0);
+		}
+
+		if (retry_counter == 10) {
+			mc13892_adc_release(use_bis);
+			return -EINTR;
+		}
+
+		pmic_write_reg(REG_INT_STATUS0, (1 << 0), (1 << 0));
 		data_ready_adc_1 = false;
 	} else {
 		data_ready_adc_2 = false;
@@ -508,9 +491,19 @@ PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 		CHECK_ERROR(pmic_write_reg(REG_ADC1, adc_1_reg, 0xFFFFFF));
 		temp = 0x800000;
 		CHECK_ERROR(pmic_write_reg(REG_ADC3, temp, 0xFFFFFF));
-		pr_debug("wait adc done bis\n");
-		wait_for_completion_interruptible(&adcbisdone_it);
+
+		pmic_read(REG_INT_STATUS0, &status0);
+		for (retry_counter=0; retry_counter<=10; retry_counter++) {
+			if (status0 & 2)
+				break;
+			pmic_read(REG_INT_STATUS0, &status0);
+		}
+		if (retry_counter == 10) {
+			mc13892_adc_release(use_bis);
+			return -EINTR;
+		}
 		data_ready_adc_2 = false;
+		pmic_write_reg(REG_INT_STATUS0, (1 << 1), (1 << 1));
 	}
 	/* read result and store in adc_param */
 	result = 0;
@@ -538,8 +531,6 @@ PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 		adc_param->ts_value.y_position1 = adc_param->value[3];
 		adc_param->ts_value.y_position2 = adc_param->value[4];
 		adc_param->ts_value.contact_resistance = adc_param->value[6];
-		CHECK_ERROR(pmic_write_reg(REG_ADC0, 0x0,
-				   ADC_TSMODE_MASK));
 	}
 
 	/*if (adc_param->read_ts) {
@@ -548,7 +539,8 @@ PMIC_STATUS mc13892_adc_convert(t_adc_param * adc_param)
 	   adc_param->ts_value.contact_resistance = adc_param->value[6];
 	   } */
 	mc13892_adc_release(use_bis);
-	up(&convert_mutex);
+	if (adc_param->read_ts == false)
+		up(&convert_mutex);
 
 	return PMIC_SUCCESS;
 }
@@ -930,6 +922,8 @@ static int pmic_adc_module_probe(struct platform_device *pdev)
 	}
 
 	init_waitqueue_head(&suspendq);
+
+	sema_init(&convert_mutex, 1);
 
 	ret = pmic_adc_init();
 	if (ret != PMIC_SUCCESS) {

@@ -361,5 +361,4 @@
 /* USB Clock on/off Control Register */
 #define OTG_AHBCLK_OFF          (0x1<<17)      /* 1: OFF */
 #define H1_AHBCLK_OFF           (0x1<<18)      /* 1: OFF */
-extern enum fsl_usb2_modes get_usb_mode(struct fsl_usb2_platform_data *pdata);
 #endif

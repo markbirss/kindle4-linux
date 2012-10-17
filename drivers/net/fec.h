@@ -12,12 +12,9 @@
 #ifndef FEC_H
 #define	FEC_H
 /****************************************************************************/
-#include <linux/netdevice.h>
-#include <linux/etherdevice.h>
 
 #if defined(CONFIG_M523x) || defined(CONFIG_M527x) || defined(CONFIG_M528x) || \
-    defined(CONFIG_M520x) || defined(CONFIG_M532x) || \
-    defined(CONFIG_ARCH_MXC) || defined(CONFIG_ARCH_MXS)
+    defined(CONFIG_M520x) || defined(CONFIG_M532x) || defined(CONFIG_ARCH_MXC)
 /*
  *	Just figures, Motorola would have to change the offsets for
  *	registers in the same peripheral device on different models
@@ -46,17 +43,8 @@
 #define FEC_R_DES_START		0x180 /* Receive descriptor ring */
 #define FEC_X_DES_START		0x184 /* Transmit descriptor ring */
 #define FEC_R_BUFF_SIZE		0x188 /* Maximum receive buff size */
-#define FEC_MIIGSK_CFGR		0x300 /* MIIGSK config register */
-#define FEC_MIIGSK_ENR		0x308 /* MIIGSK enable register */
-
-/* Define the FEC 1588 registers offset */
-#define FEC_ATIME_CTRL		0x400
-#define FEC_ATIME		0x404
-#define FEC_ATIME_EVT_OFFSET    0x408
-#define FEC_ATIME_EVT_PERIOD	0x40c
-#define FEC_ATIME_CORR		0x410
-#define FEC_ATIME_INC		0x414
-#define FEC_TS_TIMESTAMP	0x418
+#define FEC_MIIGSK_CFGR		0x300 /* MIIGSK Configuration reg */
+#define FEC_MIIGSK_ENR		0x308 /* MIIGSK Enable reg */
 
 #else
 
@@ -83,28 +71,19 @@
 #define FEC_X_DES_START		0x3d4 /* Transmit descriptor ring */
 #define FEC_R_BUFF_SIZE		0x3d8 /* Maximum receive buff size */
 #define FEC_FIFO_RAM		0x400 /* FIFO RAM buffer */
-#define FEC_MIIGSK_CFGR		0x000 /* MIIGSK config register */
-#define FEC_MIIGSK_ENR		0x000 /* MIIGSK enable register */
 
 #endif /* CONFIG_M5272 */
+
 
 /*
  *	Define the buffer descriptor structure.
  */
-#if defined(CONFIG_ARCH_MXC) || defined(CONFIG_ARCH_MXS)
+#ifdef CONFIG_ARCH_MXC
 struct bufdesc {
 	unsigned short cbd_datlen;	/* Data length */
 	unsigned short cbd_sc;	/* Control and status info */
 	unsigned long cbd_bufaddr;	/* Buffer address */
-#ifdef CONFIG_FEC_1588
-	unsigned long cbd_esc;
-	unsigned long cbd_prot;
-	unsigned long cbd_bdu;
-	unsigned long ts;
-	unsigned short res0[4];
-#endif
 };
-
 #else
 struct bufdesc {
 	unsigned short	cbd_sc;			/* Control and status info */
@@ -146,8 +125,6 @@ struct bufdesc {
 #define BD_ENET_RX_CL           ((ushort)0x0001)
 #define BD_ENET_RX_STATS        ((ushort)0x013f)        /* All status bits */
 
-#define BD_ENET_RX_INT		0x00800000
-
 /* Buffer descriptor control/status used by Ethernet transmit.
 */
 #define BD_ENET_TX_READY        ((ushort)0x8000)
@@ -165,7 +142,7 @@ struct bufdesc {
 #define BD_ENET_TX_CSL          ((ushort)0x0001)
 #define BD_ENET_TX_STATS        ((ushort)0x03ff)        /* All status bits */
 
-#define BD_ENET_TX_INT		0x40000000
 
 /****************************************************************************/
 #endif /* FEC_H */
+

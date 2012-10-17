@@ -165,6 +165,7 @@ header-y += utime.h
 header-y += veth.h
 header-y += videotext.h
 header-y += x25.h
+header-y += zforce.h
 
 unifdef-y += acct.h
 unifdef-y += adb.h
@@ -397,6 +398,7 @@ unifdef-y += pmic_light.h
 unifdef-y += pmic_rtc.h
 unifdef-y += pmic_status.h
 unifdef-y += soundcard.h
+unifdef-y += pxp_dma.h
 
 objhdr-y += version.h
 header-y += wimax.h

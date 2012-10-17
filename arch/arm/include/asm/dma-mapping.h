@@ -30,6 +30,11 @@ static inline dma_addr_t page_to_dma(struct device *dev, struct page *page)
 #error "this machine class needs to define __arch_page_to_dma to use HIGHMEM"
 #endif
 
+static inline struct page *dma_to_page(struct device *dev, dma_addr_t addr)
+{
+        return pfn_to_page(__bus_to_pfn(addr));
+}
+
 static inline void *dma_to_virt(struct device *dev, dma_addr_t addr)
 {
 	return (void *)__bus_to_virt(addr);
@@ -43,6 +48,11 @@ static inline dma_addr_t virt_to_dma(struct device *dev, void *addr)
 static inline dma_addr_t page_to_dma(struct device *dev, struct page *page)
 {
 	return __arch_page_to_dma(dev, page);
+}
+
+static inline struct page *dma_to_page(struct device *dev, dma_addr_t addr)
+{
+        return __arch_dma_to_page(dev, addr);
 }
 
 static inline void *dma_to_virt(struct device *dev, dma_addr_t addr)
@@ -351,6 +361,11 @@ static inline void dma_unmap_single(struct device *dev, dma_addr_t handle,
 		size_t size, enum dma_data_direction dir)
 {
 	/* nothing to do */
+	BUG_ON(!valid_dma_direction(dir));
+
+	if (!arch_is_coherent() && dir == DMA_FROM_DEVICE)
+		dma_cache_maint_page(dma_to_page(dev, handle),
+			handle & ~PAGE_MASK, size, dir);
 }
 #endif /* CONFIG_DMABOUNCE */
 

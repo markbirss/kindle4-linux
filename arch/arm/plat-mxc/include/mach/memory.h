@@ -95,6 +95,31 @@ static inline void __arch_adjust_zones(int node, unsigned long *zone_size,
 #define arch_adjust_zones(node, size, holes) \
 	__arch_adjust_zones(node, size, holes)
 
+
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+
+#define MXC_MEM_BASE		PHYS_OFFSET
+#define MXC_MEM_SIZE		0x10000000  /* BEN TODO */
+#define MXC_MEM_MAX		MXC_MEM_BASE + MXC_MEM_SIZE
+
+#define MXC_WDOG_PRINTK_BUF_SIZE	(PAGE_SIZE * 2)
+#define MXC_WDOG_PRINTK_BUF_BASE	MXC_MEM_MAX - MXC_WDOG_PRINTK_BUF_SIZE
+
+#define MXC_WDOG_PRINTK_BUF_MAGIC	0
+#define MXC_WDOG_PRINTK_BUF_START_INDEX	1
+#define MXC_WDOG_PRINTK_BUF_END_INDEX	2
+
+#define MAX_WDOG_PRINTK_LINE		96 
+
+#define MXC_WDOG_PRINTK_BUF_MAX_INDEX   ((MXC_WDOG_PRINTK_BUF_SIZE/MAX_WDOG_PRINTK_LINE) - 1)
+#define MXC_WDOG_PRINTK_BUF_INVALID_INDEX 0xFFFFFFFF
+
+#define WDOG_PTR_VALID(idx) ((((u32) (idx)) >= 0) && (((u32) (idx)) < (MXC_WDOG_PRINTK_BUF_MAX_INDEX)))
+
+#define MXC_WDOG_PRINTK_BUF_MAGIC_VALUE	0xBEADEABE
+
+#endif
+
 #endif
 
 #endif /* __ASM_ARCH_MXC_MEMORY_H__ */

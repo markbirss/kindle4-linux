@@ -307,11 +307,8 @@ static int imx_ssi_set_dai_fmt(struct snd_soc_dai *cpu_dai, unsigned int fmt)
 		srcr |= SSI_SRCR_RXDIR;
 		break;
 	case SND_SOC_DAIFMT_CBM_CFM:
-		if (((fmt & SND_SOC_DAIFMT_FORMAT_MASK) == SND_SOC_DAIFMT_I2S)
-		    && priv->network_mode) {
-			scr &= ~SSI_SCR_I2S_MODE_MASK;
-			scr |= SSI_SCR_I2S_MODE_SLAVE;
-		}
+		scr &= ~SSI_SCR_I2S_MODE_MASK;
+		scr |= SSI_SCR_I2S_MODE_SLAVE;
 		break;
 	}
 
@@ -582,33 +579,9 @@ static int imx_ssi_resume(struct snd_soc_dai *dai)
 #define imx_ssi_resume	NULL
 #endif
 
-static int fifo_err_counter;
-
-static irqreturn_t imx_ssi_irq(int irq, void *dev_id)
-{
-	struct imx_ssi *priv = (struct imx_ssi *)dev_id;
-	void __iomem *ioaddr = priv->ioaddr;
-	if (fifo_err_counter++ % 1000 == 0)
-		printk(KERN_ERR "%s %s SISR %x SIER %x fifo_errs=%d\n",
-		       __func__, priv->pdev->name,
-		       __raw_readl(ioaddr + SSI_SISR),
-		       __raw_readl(ioaddr + SSI_SIER), fifo_err_counter);
-	__raw_writel((SSI_SIER_TUE0_EN | SSI_SIER_ROE0_EN), ioaddr + SSI_SISR);
-	return IRQ_HANDLED;
-}
-
 static int imx_ssi_probe(struct platform_device *pdev, struct snd_soc_dai *dai)
 {
 	struct imx_ssi *priv = (struct imx_ssi *)dai->private_data;
-
-	if (priv->irq >= 0) {
-		if (request_irq(priv->irq, imx_ssi_irq, IRQF_SHARED,
-				pdev->name, priv)) {
-			printk(KERN_ERR "%s: failure requesting irq for %s\n",
-			       __func__, pdev->name);
-			return -EBUSY;
-		}
-	}
 
 	return 0;
 }
@@ -617,9 +590,6 @@ static void imx_ssi_remove(struct platform_device *pdev,
 			   struct snd_soc_dai *dai)
 {
 	struct imx_ssi *priv = (struct imx_ssi *)dai->private_data;
-
-	if (priv->irq >= 0)
-		free_irq(priv->irq, dai);
 }
 
 #define IMX_SSI_RATES \
@@ -697,12 +667,12 @@ static int imx_ssi_dev_probe(struct platform_device *pdev)
 		dai->remove = imx_ssi_remove;
 		dai->resume = imx_ssi_resume;
 
-		dai->playback.channels_min = 1;
+		dai->playback.channels_min = 2;
 		dai->playback.channels_max = 2;
 		dai->playback.rates = IMX_SSI_RATES;
 		dai->playback.formats = IMX_SSI_FORMATS;
 
-		dai->capture.channels_min = 1;
+		dai->capture.channels_min = 2;
 		dai->capture.channels_max = 2;
 		dai->capture.rates = IMX_SSI_RATES;
 		dai->capture.formats = IMX_SSI_FORMATS;

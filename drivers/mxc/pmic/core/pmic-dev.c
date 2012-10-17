@@ -64,7 +64,7 @@ static int pmic_major;
 static struct class *pmic_class;
 static struct fasync_struct *pmic_dev_queue;
 
-static DECLARE_MUTEX(event_mutex);
+static DEFINE_SEMAPHORE(event_mutex);
 static struct circ_buf pmic_events;
 
 static void callbackfn(void *event)

@@ -63,4 +63,4 @@ obj-$(CONFIG_WL12XX)	+= wl12xx/
 
 obj-$(CONFIG_IWM)	+= iwmc3200wifi/
 
-obj-$(CONFIG_ATH6K_LEGACY)	+= ath6kl/
+obj-$(CONFIG_ATH6K_LEGACY)	+= ar6003/

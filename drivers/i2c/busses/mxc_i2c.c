@@ -117,6 +117,9 @@ static const struct clk_div_table i2c_clk_table[] = {
 extern void gpio_i2c_active(int i2c_num);
 extern void gpio_i2c_inactive(int i2c_num);
 
+int mxc_i2c_suspended = 0;
+EXPORT_SYMBOL(mxc_i2c_suspended);
+
 /*!
  * Transmit a \b STOP signal to the slave device.
  *
@@ -125,21 +128,23 @@ extern void gpio_i2c_inactive(int i2c_num);
 static void mxc_i2c_stop(mxc_i2c_device * dev)
 {
 	unsigned int cr, sr;
-	int retry = 16;
+	unsigned long orig_jiffies = jiffies;
 
 	cr = readw(dev->membase + MXC_I2CR);
 	cr &= ~(MXC_I2CR_MSTA | MXC_I2CR_MTX);
 	writew(cr, dev->membase + MXC_I2CR);
 
 	/* Wait till the Bus Busy bit is reset */
-	sr = readw(dev->membase + MXC_I2SR);
-	while (retry-- && ((sr & MXC_I2SR_IBB))) {
-		udelay(3);
+	while (1) {
 		sr = readw(dev->membase + MXC_I2SR);
+		if (!(sr & MXC_I2SR_IBB))
+			break;
+		if (time_after(jiffies, orig_jiffies + msecs_to_jiffies(500))) {
+			dev_err(&dev->adap.dev, " E mxc_i2c_stop: set_busy_timeout::Could not set I2C Bus Busy bit to zero");
+			break;
+		}
+		schedule();
 	}
-	if (retry <= 0)
-		dev_err(&dev->adap.dev, "Could not set I2C Bus Busy bit"
-			" to zero.\n");
 }
 
 /*!
@@ -167,13 +172,13 @@ static int mxc_i2c_wait_for_tc(mxc_i2c_device * dev, int trans_flag)
 
 	if (retry <= 0) {
 		/* Unable to send data */
-		dev_err(&dev->adap.dev, "Data not transmitted\n");
+		dev_err(&dev->adap.dev, "E mxc_i2c_wait_for_tc:set_busy_timeout:retry=%d:Data not transmitted\n", retry);
 		return -1;
 	}
 
 	if (!dev->tx_success) {
 		/* An ACK was not received for transmitted byte */
-		dev_err(&dev->adap.dev, "ACK not received \n");
+		dev_err(&dev->adap.dev, "E mxc_i2c_wait_for_tc:tx_success_fail::ACK not received \n");
 		return -1;
 	}
 
@@ -193,7 +198,7 @@ static int mxc_i2c_start(mxc_i2c_device *dev, struct i2c_msg *msg)
 {
 	volatile unsigned int cr, sr;
 	unsigned int addr_trans;
-	int retry = 16;
+	unsigned long orig_jiffies = jiffies;
 
 	/*
 	 * Set the slave address and the requested transfer mode
@@ -210,14 +215,15 @@ static int mxc_i2c_start(mxc_i2c_device *dev, struct i2c_msg *msg)
 	writew(cr, dev->membase + MXC_I2CR);
 
 	/* Wait till the Bus Busy bit is set */
-	sr = readw(dev->membase + MXC_I2SR);
-	while (retry-- && (!(sr & MXC_I2SR_IBB))) {
-		udelay(3);
+	while (1) {
 		sr = readw(dev->membase + MXC_I2SR);
-	}
-	if (retry <= 0) {
-		dev_err(&dev->adap.dev, "Could not grab Bus ownership\n");
-		return -EBUSY;
+		if ( sr & MXC_I2SR_IBB )
+			break;
+		if (time_after(jiffies, orig_jiffies + msecs_to_jiffies(500))) {
+			dev_err(&dev->adap.dev, " E mxc_i2c_xfer:start:return=-EBUSY:Could not grab Bus ownership\n");
+			return -EBUSY;
+		}
+		schedule();
 	}
 
 	/* Set the Transmit bit */
@@ -260,7 +266,7 @@ static int mxc_i2c_repstart(mxc_i2c_device *dev, struct i2c_msg *msg)
 		sr = readw(dev->membase + MXC_I2SR);
 	}
 	if (retry <= 0) {
-		dev_err(&dev->adap.dev, "Could not grab Bus ownership\n");
+		/*report to the caller*/	
 		return -EBUSY;
 	}
 	writew(addr_trans, dev->membase + MXC_I2DR);
@@ -426,9 +432,10 @@ static int mxc_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 	int i, ret = 0, addr_comp = 0;
 	volatile unsigned int sr;
 	int retry = 5;
+	int ebusy=0;
 
 	if (dev->low_power) {
-		dev_err(&dev->adap.dev, "I2C Device in low power mode\n");
+		dev_err(&dev->adap.dev, " E mxc_i2c_xfer:low_power::I2C Device in low power mode\n");
 		return -EREMOTEIO;
 	}
 
@@ -449,7 +456,7 @@ static int mxc_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 
 	if ((sr & MXC_I2SR_IBB) && retry < 0) {
 		mxc_i2c_module_dis(dev);
-		dev_err(&dev->adap.dev, "Bus busy\n");
+		dev_err(&dev->adap.dev, " E mxc_i2c_xfer:Bus_busy::\n");
 		return -EREMOTEIO;
 	}
 
@@ -466,8 +473,10 @@ static int mxc_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			/*
 			 * Send a start or repeat start signal
 			 */
-			if (mxc_i2c_start(dev, &msgs[0]))
+			if ( mxc_i2c_start(dev, &msgs[0])) {
+				mxc_i2c_module_dis(dev);
 				return -EREMOTEIO;
+			}
 			/* Wait for the address cycle to complete */
 			if (mxc_i2c_wait_for_tc(dev, msgs[0].flags)) {
 				mxc_i2c_stop(dev);
@@ -484,7 +493,7 @@ static int mxc_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			if ((msgs[i].addr != msgs[i - 1].addr) ||
 			    ((msgs[i].flags & I2C_M_RD) !=
 			     (msgs[i - 1].flags & I2C_M_RD))) {
-				mxc_i2c_repstart(dev, &msgs[i]);
+				ebusy |= mxc_i2c_repstart(dev, &msgs[i]);
 				/* Wait for the address cycle to complete */
 				if (mxc_i2c_wait_for_tc(dev, msgs[i].flags)) {
 					mxc_i2c_stop(dev);
@@ -502,21 +511,22 @@ static int mxc_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[],
 			ret = mxc_i2c_readbytes(dev, &msgs[i], (i + 1 == num),
 						addr_comp);
 			if (ret < 0) {
-				dev_err(&dev->adap.dev, "mxc_i2c_readbytes:"
-					" fail.\n");
+				dev_err(&dev->adap.dev, " E mxc_i2c_xfer:readbytes:ret=%d:fail\n", ret);
 				break;
 			}
 		} else {
 			/* Write the data */
 			ret = mxc_i2c_writebytes(dev, &msgs[i], (i + 1 == num));
 			if (ret < 0) {
-				dev_err(&dev->adap.dev, "mxc_i2c_writebytes:"
-					" fail.\n");
+				dev_err(&dev->adap.dev, " E mxc_i2c_xfer:writebytes:ret=%d:fail\n", ret);
 				break;
 			}
 		}
 	}
-
+	if(ebusy)
+	{
+		dev_err(&dev->adap.dev, " E mxc_i2c_xfer:repstart:return=-EBUSY:Could not grab Bus ownership\n");
+	}
 	//gpio_i2c_inactive(dev->adap.id);
 	mxc_i2c_module_dis(dev);
 	/*
@@ -569,7 +579,7 @@ static irqreturn_t mxc_i2c_handler(int irq, void *dev_id)
 	writew(0x0, dev->membase + MXC_I2SR);
 
 	if (sr & MXC_I2SR_IAL) {
-		dev_err(&dev->adap.dev, "Bus Arbitration lost\n");
+		dev_err(&dev->adap.dev, " E mxc_i2c_handler:def::Bus Arbitration lost\n");
 	} else {
 		/* Interrupt due byte transfer completion */
 		dev->tx_success = true;
@@ -595,7 +605,7 @@ static irqreturn_t mxc_i2c_handler(int irq, void *dev_id)
  *
  * @return  The function returns 0 on success and -1 on failure.
  */
-static int mxci2c_suspend(struct platform_device *pdev, pm_message_t state)
+static int mxci2c_suspend_noirq(struct platform_device *pdev, pm_message_t state)
 {
 	mxc_i2c_device *mxcdev = platform_get_drvdata(pdev);
 	volatile unsigned int sr = 0;
@@ -603,6 +613,8 @@ static int mxci2c_suspend(struct platform_device *pdev, pm_message_t state)
 	if (mxcdev == NULL) {
 		return -1;
 	}
+
+	mxc_i2c_suspended = 1;
 
 	/* Prevent further calls to be processed */
 	mxcdev->low_power = true;
@@ -627,7 +639,7 @@ static int mxci2c_suspend(struct platform_device *pdev, pm_message_t state)
  *
  * @return  The function returns 0 on success and -1 on failure
  */
-static int mxci2c_resume(struct platform_device *pdev)
+static int mxci2c_resume_noirq(struct platform_device *pdev)
 {
 	mxc_i2c_device *mxcdev = platform_get_drvdata(pdev);
 
@@ -636,6 +648,8 @@ static int mxci2c_resume(struct platform_device *pdev)
 
 	mxcdev->low_power = false;
 	gpio_i2c_active(mxcdev->adap.id);
+
+	mxc_i2c_suspended = 0;
 
 	return 0;
 }
@@ -690,7 +704,7 @@ static int mxci2c_probe(struct platform_device *pdev)
 
 	mxc_i2c->low_power = false;
 
-	gpio_i2c_active(id);
+//	gpio_i2c_active(id);
 
 	mxc_i2c->clk = clk_get(&pdev->dev, "i2c_clk");
 	clk_freq = clk_get_rate(mxc_i2c->clk);
@@ -710,10 +724,13 @@ static int mxci2c_probe(struct platform_device *pdev)
 		i--;
 		mxc_i2c->clkdiv = 0x1F;	/* Use max divider */
 	}
-	dev_dbg(&pdev->dev, "i2c speed is %d/%d = %d bps, reg val = 0x%02X\n",
-		clk_freq, i2c_clk_table[i].div,
-		clk_freq / i2c_clk_table[i].div, mxc_i2c->clkdiv);
-
+	
+	dev_dbg(&pdev->dev, " E mxci2c_probe:def:i2c_speed=%dbps, freq=%d, div=%d, reg_val=0x%02X:\n", 
+				clk_freq / i2c_clk_table[i].div, 
+				clk_freq, 
+				i2c_clk_table[i].div,
+			 	mxc_i2c->clkdiv);
+	
 	/*
 	 * Set the adapter information
 	 */
@@ -736,7 +753,7 @@ static int mxci2c_probe(struct platform_device *pdev)
       err2:
 	iounmap(mxc_i2c->membase);
       err1:
-	dev_err(&pdev->dev, "failed to probe i2c adapter\n");
+	dev_err(&pdev->dev, " E mxci2c_probe:def:probe_i2c_adapter=fail:\n");
 	kfree(mxc_i2c);
 	return ret;
 }
@@ -774,8 +791,8 @@ static struct platform_driver mxci2c_driver = {
 		   },
 	.probe = mxci2c_probe,
 	.remove = mxci2c_remove,
-	.suspend_late = mxci2c_suspend,
-	.resume_early = mxci2c_resume,
+	.suspend_late = mxci2c_suspend_noirq,
+	.resume_early = mxci2c_resume_noirq,
 };
 
 /*!

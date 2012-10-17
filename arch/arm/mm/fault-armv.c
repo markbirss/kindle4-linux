@@ -125,8 +125,6 @@ make_coherent(struct address_space *mapping, struct vm_area_struct *vma, unsigne
 	flush_dcache_mmap_unlock(mapping);
 	if (aliases)
 		adjust_pte(vma, addr);
-	else
-		flush_cache_page(vma, addr, pfn);
 }
 
 /*

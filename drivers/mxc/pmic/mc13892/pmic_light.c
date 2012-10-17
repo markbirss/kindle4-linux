@@ -86,8 +86,13 @@
 #define BIT_BP_GREEN_WID	2
 #define BIT_BP_BLUE_WID		2
 
+extern int yoshi_button_green_led;
+
 int pmic_light_init_reg(void)
 {
+	if (yoshi_button_green_led)
+		return 0;
+	
 	CHECK_ERROR(pmic_write_reg(REG_LED_CTL0, 0, PMIC_ALL_BITS));
 	CHECK_ERROR(pmic_write_reg(REG_LED_CTL1, 0, PMIC_ALL_BITS));
 	CHECK_ERROR(pmic_write_reg(REG_LED_CTL2, 0, PMIC_ALL_BITS));

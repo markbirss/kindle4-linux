@@ -35,6 +35,9 @@
 #include <linux/platform_device.h>
 #include <linux/clk.h>
 #include <linux/uaccess.h>
+#include <linux/device.h>
+#include <linux/pmic_external.h>
+#include <linux/pmic_rtc.h>
 
 #include <mach/hardware.h>
 #define RTC_INPUT_CLK_32768HZ	(0x00 << 5)
@@ -126,8 +129,123 @@ struct rtc_plat_data {
 #define MXC_EXTERNAL_RTC_ERR	-1
 #define MXC_EXTERNAL_RTC_NONE	-2
 
+static struct device *mxc_rtc_dev;
+
+#define RTC_TIMER_THRESHOLD	30000	/* 30 seconds */
+static void do_rtc_work(struct work_struct *work);
+static DECLARE_DELAYED_WORK(rtc_work, do_rtc_work);
+
+/* The last good value of the rtc time */
+extern u32 saved_last_seconds;
+
+/*
+ * Both MEMA and MEMB are 24-bit registers. The pmic rtc time is 32-bit.
+ * We save the top 8 bits in MEM_A and bottom 24 bits into MEM_B.
+ */
+static void do_rtc_work(struct work_struct *work)
+{
+	int ret = 0;
+	struct timeval tmp;
+	u32 seconds;
+	unsigned int regA = 0, regB = 0;
+
+	if (!pmic_rtc_loaded()) {
+		goto out;
+	}
+
+	ret = pmic_rtc_get_time(&tmp);
+
+	if (!ret) {
+		seconds = tmp.tv_sec;
+
+		if (seconds > saved_last_seconds) {
+			/* Mask out 24-bits and save the rtc value */
+			regB = seconds & 0x00ffffff;
+			pmic_write_reg(REG_MEM_B, regB, 0x00ffffff);
+
+			/* The upper 8-bits are stored in MEM_A begining at location 16 */
+			regA = (seconds & 0xff000000) >> 24;
+			pmic_write_reg(REG_MEM_A, (regA << 16), (0xff << 16));
+		}
+	}
+out:
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
+}
+
+static int show_rtc_pmic_epoch_time(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	u32 seconds;
+	unsigned int regA = 0, regB = 0;
+
+	pmic_read_reg(REG_MEM_A, &regA, (0xff << 16));
+	pmic_read_reg(REG_MEM_B, &regB, 0x00ffffff);
+
+	regA &= 0x00ff0000; /* Clear out the remaining bits */
+
+	/* Extra shift the MEM_A value */
+	seconds = (regA << 8) | regB;
+	return sprintf(buf, "%x\n", seconds);
+}
+static DEVICE_ATTR(rtc_pmic_epoch_time, 0666, show_rtc_pmic_epoch_time, NULL);
+
+static int show_rtc_saved_last_seconds(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%x\n", saved_last_seconds);
+}
+static DEVICE_ATTR(rtc_saved_last_seconds, 0666, show_rtc_saved_last_seconds, NULL);
+
 static u32 rtc_freq = 2;	/* minimun value for PIE */
 static unsigned long rtc_status;
+
+/*!
+ * This function reads the RTC value from some external source.
+ *
+ * @param  second       pointer to the returned value in second
+ *
+ * @return 0 if successful; non-zero otherwise
+ */
+int get_ext_rtc_time(u32 * second)
+{
+	int ret = 0;
+	struct timeval tmp;
+
+	if (!pmic_rtc_loaded()) {
+		return MXC_EXTERNAL_RTC_NONE;
+	}
+
+	ret = pmic_rtc_get_time(&tmp);
+
+	if (0 == ret)
+		*second = tmp.tv_sec;
+	else
+		ret = MXC_EXTERNAL_RTC_ERR;
+
+	return ret;
+}
+
+/*
+ * This function sets external RTC
+ * 
+ * @param  second       value in second to be set to external RTC
+ * 
+ * @return 0 if successful; non-zero otherwise
+ */
+int set_ext_rtc_time(u32 second)
+{
+	int ret = 0;
+	struct timeval tmp;
+
+	if (!pmic_rtc_loaded()) {
+		return MXC_EXTERNAL_RTC_NONE;
+	}
+
+	tmp.tv_sec = second;
+	ret = pmic_rtc_set_time(&tmp);
+	if (0 != ret)
+		ret = MXC_EXTERNAL_RTC_ERR;
+
+	return ret;
+} 
 
 static struct rtc_time g_rtc_alarm = {
 	.tm_year = 0,
@@ -553,6 +671,48 @@ static struct rtc_class_ops mxc_rtc_ops = {
 	.proc = mxc_rtc_proc,
 };
 
+static long wakeup_value = 0;
+static ssize_t wakeup_enable_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	return sprintf(buf, "%ld\n", wakeup_value);
+}
+
+static ssize_t wakeup_enable_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	int ret;
+	struct timeval tmp;
+	int value = 0;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Error setting the wakeup value in PMIC RTC\n");
+		return -EINVAL;
+	}
+
+	if (value != 0) {
+		ret = pmic_rtc_get_time(&tmp);
+		if (ret < 0)
+			printk (KERN_ERR "Failed reading time from RTC\n");
+
+		tmp.tv_sec += value;
+
+		ret = pmic_rtc_set_time_alarm(&tmp);
+
+		if (ret < 0)
+			printk (KERN_ERR "Failed setting ALARM for suspend wakeup\n");
+
+		/* Clear TODAI interrupt flag and unmask TODAM */
+		pmic_write_reg(REG_INT_STATUS1, 0, 0x2);
+		pmic_write_reg(REG_INT_MASK1, 0, 0x2);
+
+		wakeup_value = value;
+	}
+
+	return size;
+}
+static DEVICE_ATTR(wakeup_enable, 0644, wakeup_enable_show, wakeup_enable_store);
+
 /*! MXC RTC Power management control */
 
 static struct timespec mxc_rtc_delta;
@@ -560,6 +720,7 @@ static struct timespec mxc_rtc_delta;
 static int mxc_rtc_probe(struct platform_device *pdev)
 {
 	struct clk *clk;
+	u32 sec;
 	struct timespec tv;
 	struct resource *res;
 	struct rtc_device *rtc;
@@ -579,7 +740,10 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	clk_enable(pdata->clk);
 
 	pdata->baseaddr = res->start;
-	pdata->ioaddr = ((void *)(IO_ADDRESS(pdata->baseaddr)));
+	pdata->ioaddr = ioremap(res->start, resource_size(res));
+
+	printk(KERN_INFO "mxc_rtc mapped to 0x%x\n", (unsigned int)pdata->ioaddr);
+
 	/* Configure and enable the RTC */
 	pdata->irq = platform_get_irq(pdev, 0);
 	if (pdata->irq >= 0) {
@@ -601,9 +765,18 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 	}
 	pdata->rtc = rtc;
 	platform_set_drvdata(pdev, pdata);
+	ret = get_ext_rtc_time(&sec);
+	/*
+	 * If the current time is less than the saved time, use the saved time
+	 */
+	if (sec < saved_last_seconds) {
+		sec = saved_last_seconds;
+		set_ext_rtc_time(sec);
+	}
+
 	tv.tv_nsec = 0;
 	tv.tv_sec = get_alarm_or_time(&pdev->dev, MXC_RTC_TIME);
-	clk = clk_get(NULL, "ckil");
+	clk = clk_get(NULL, "rtc_clk");
 	if (clk_get_rate(clk) == 32768)
 		reg = RTC_INPUT_CLK_32768HZ;
 	else if (clk_get_rate(clk) == 32000)
@@ -621,7 +794,20 @@ static int mxc_rtc_probe(struct platform_device *pdev)
 		printk(KERN_ALERT "rtc : hardware module can't be enabled!\n");
 		return -EPERM;
 	}
-	printk("Real TIme clock Driver v%s \n", RTC_VERSION);
+	printk("Real Time clock Driver v%s \n", RTC_VERSION);
+
+	set_ext_rtc_time(sec);
+	if (device_create_file(&pdev->dev, &dev_attr_wakeup_enable) < 0)
+		printk (KERN_ERR "Error - could not create RTC sysfs entry\n");
+
+	device_init_wakeup(&pdev->dev, 1);
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
+
+	if (device_create_file(&pdev->dev, &dev_attr_rtc_pmic_epoch_time) < 0)
+		printk (KERN_ERR "mxc_rtc: error creating rtc_pmic_epoch_time entry\n");
+
+	if (device_create_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds) < 0)
+		printk (KERN_ERR "mxc_rtc: error creating rtc_saved_last_seconds entry\n");
 	return ret;
 }
 
@@ -632,12 +818,20 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 	if (pdata->irq >= 0) {
 		free_irq(pdata->irq, pdev);
 	}
+	cancel_rearming_delayed_work(&rtc_work);
+	device_remove_file(&pdev->dev, &dev_attr_wakeup_enable);
+	device_remove_file(&pdev->dev, &dev_attr_rtc_pmic_epoch_time);
+	device_remove_file(&pdev->dev, &dev_attr_rtc_saved_last_seconds);
 	clk_disable(pdata->clk);
 	clk_put(pdata->clk);
 	kfree(pdata);
 	mxc_rtc_release(NULL);
 	return 0;
 }
+
+unsigned long suspend_time = 0;
+unsigned long last_suspend_time = 0;
+unsigned long total_suspend_time = 0;
 
 /*!
  * This function is called to save the system time delta relative to
@@ -653,14 +847,25 @@ static int __exit mxc_rtc_remove(struct platform_device *pdev)
 static int mxc_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct timespec tv;
+	struct timespec now = current_kernel_time();
+	struct timeval tmp;
 
 	/* calculate time delta for suspend */
 	/* RTC precision is 1 second; adjust delta for avg 1/2 sec err */
 	tv.tv_nsec = NSEC_PER_SEC >> 1;
 	tv.tv_sec = get_alarm_or_time(&pdev->dev, MXC_RTC_TIME);
+
+	pmic_rtc_get_time(&tmp);
+	suspend_time = tmp.tv_sec;
+
 	set_normalized_timespec(&mxc_rtc_delta,
-				xtime.tv_sec - tv.tv_sec,
-				xtime.tv_nsec - tv.tv_nsec);
+				now.tv_sec - tv.tv_sec,
+				now.tv_nsec - tv.tv_nsec);
+
+	if (wakeup_value != 0) {
+		if (device_may_wakeup(&pdev->dev))
+			enable_irq_wake(platform_get_irq(pdev, 0));
+	}
 
 	return 0;
 }
@@ -678,9 +883,20 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 {
 	struct timespec tv;
 	struct timespec ts;
+	struct timeval tmp;
+	unsigned long resume_time = 0;
+
+	if (wakeup_value != 0) {
+		wakeup_value = 0;
+		if (device_may_wakeup(&pdev->dev))
+			disable_irq_wake(platform_get_irq(pdev, 0));
+	}
 
 	tv.tv_nsec = 0;
 	tv.tv_sec = get_alarm_or_time(&pdev->dev, MXC_RTC_TIME);
+
+	pmic_rtc_get_time(&tmp);
+	resume_time = tmp.tv_sec;
 
 	/* restore wall clock using delta against this RTC;
 	 * adjust again for avg 1/2 second RTC sampling error
@@ -689,6 +905,10 @@ static int mxc_rtc_resume(struct platform_device *pdev)
 				tv.tv_sec + mxc_rtc_delta.tv_sec,
 				(NSEC_PER_SEC >> 1) + mxc_rtc_delta.tv_nsec);
 	do_settimeofday(&ts);
+
+	last_suspend_time = resume_time - suspend_time;
+	total_suspend_time += last_suspend_time;
+	schedule_delayed_work(&rtc_work, msecs_to_jiffies(RTC_TIMER_THRESHOLD));
 
 	return 0;
 }

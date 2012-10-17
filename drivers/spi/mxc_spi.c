@@ -38,6 +38,9 @@
 #include <linux/spi/spi_bitbang.h>
 #include <mach/hardware.h>
 
+int mxc_spi_suspended = 0;
+EXPORT_SYMBOL(mxc_spi_suspended);
+
 #define MXC_CSPIRXDATA		0x00
 #define MXC_CSPITXDATA		0x04
 #define MXC_CSPICTRL		0x08
@@ -49,13 +52,14 @@
 #define MXC_CSPICTRL_CSMASK	0x3
 #define MXC_CSPICTRL_SMC	(1 << 3)
 
-#define MXC_CSPIINT_TEEN_SHIFT		0
+#define MXC_CSPIINT_TEEN_SHIFT	0
 #define MXC_CSPIINT_THEN_SHIFT	1
-#define MXC_CSPIINT_TFEN_SHIFT		2
-#define MXC_CSPIINT_RREN_SHIFT		3
-#define MXC_CSPIINT_RHEN_SHIFT       4
-#define MXC_CSPIINT_RFEN_SHIFT        5
-#define MXC_CSPIINT_ROEN_SHIFT        6
+#define MXC_CSPIINT_TFEN_SHIFT	2
+#define MXC_CSPIINT_RREN_SHIFT	3
+#define MXC_CSPIINT_RHEN_SHIFT  4
+#define MXC_CSPIINT_RFEN_SHIFT  5
+#define MXC_CSPIINT_ROEN_SHIFT  6
+#define MXC_CSPIINT_TCEN_SHIFT  7
 
 #define MXC_HIGHPOL	0x0
 #define MXC_NOPHA	0x0
@@ -68,6 +72,7 @@
 #define MXC_CSPISTAT_RH		4
 #define MXC_CSPISTAT_RF		5
 #define MXC_CSPISTAT_RO		6
+#define MXC_CSPISTAT_TC		7
 
 #define MXC_CSPIPERIOD_32KHZ	(1 << 15)
 
@@ -431,6 +436,23 @@ static struct mxc_spi_unique_def spi_ver_0_0 = {
 extern void gpio_spi_active(int cspi_mod);
 extern void gpio_spi_inactive(int cspi_mod);
 
+#ifdef DEBUG
+static void mxc_spi_dump_regs(struct mxc_spi *data) {
+    struct mxc_spi_unique_def *spi_ver_def = data->spi_ver_def;
+
+    printk("SPI regs: (base=0x%x)\n", (u32) data->res->start);
+    printk("CONREG: 0x%x (0x%x)\n", __raw_readl(data->base + MXC_CSPICTRL), (u32) (data->base + MXC_CSPICTRL));
+    if (spi_ver_def == &spi_ver_2_3) 
+	printk("CFGREG: 0x%x (0x%x)\n", __raw_readl(data->ctrl_addr + MXC_CSPICONFIG), (u32) (data->ctrl_addr + MXC_CSPICONFIG));
+    printk("INTREG: 0x%x (0x%x)\n", __raw_readl(data->ctrl_addr + MXC_CSPIINT), (u32) (data->ctrl_addr + MXC_CSPIINT));
+    printk("STATREG: 0x%x (0x%x)\n", __raw_readl(data->stat_addr), (u32) (data->stat_addr));
+    printk("PERIODREG: 0x%x (0x%x)\n", __raw_readl(data->period_addr), (u32) (data->period_addr));
+    printk("TESTREG: 0x%x (0x%x)\n", __raw_readl(data->test_addr), (u32) (data->test_addr));
+    printk("\n");
+	   
+}
+#endif
+
 #define MXC_SPI_BUF_RX(type)	\
 void mxc_spi_buf_rx_##type(struct mxc_spi *master_drv_data, u32 val)\
 {\
@@ -467,7 +489,8 @@ MXC_SPI_BUF_RX(u8)
 static int spi_enable_interrupt(struct mxc_spi *master_data, unsigned int irqs)
 {
 	if (irqs & ~((1 << master_data->spi_ver_def->intr_bit_shift) - 1)) {
-		return -1;
+	    printk("%s: Enabling invalid interrupt!\n", __FUNCTION__);
+	    return -1;
 	}
 
 	__raw_writel((irqs | __raw_readl(MXC_CSPIINT + master_data->ctrl_addr)),
@@ -506,26 +529,85 @@ static int spi_disable_interrupt(struct mxc_spi *master_data, unsigned int irqs)
 static unsigned int spi_find_baudrate(struct mxc_spi *master_data,
 				      unsigned int baud)
 {
+    u32 clk_src = master_data->spi_ipg_clk;
+    int i;
+
+    /* BEN - rework math for calculating divisors in CSPI and ECSPI controllers */
+    /*       don't care about the v0.0 controller, just use the old calculation */
+    if (master_data->spi_ver_def == &spi_ver_0_0) {
 	unsigned int divisor;
 	unsigned int shift = 0;
 
 	/* Calculate required divisor (rounded) */
-	divisor = (master_data->spi_ipg_clk + baud / 2) / baud;
+	divisor = (clk_src + baud / 2) / baud;
 	while (divisor >>= 1)
-		shift++;
+	    shift++;
 
-	if (master_data->spi_ver_def == &spi_ver_0_0) {
-		shift = (shift - 1) * 2;
-	} else if (master_data->spi_ver_def == &spi_ver_2_3) {
-		shift = shift;
-	} else {
-		shift -= 2;
-	}
-
+	shift = (shift - 1) * 2;
+	    
 	if (shift > master_data->spi_ver_def->max_data_rate)
-		shift = master_data->spi_ver_def->max_data_rate;
+	    shift = master_data->spi_ver_def->max_data_rate;
 
 	return (shift << master_data->spi_ver_def->data_shift);
+
+    } else if (master_data->spi_ver_def == &spi_ver_2_3) {
+	int pre_div = 0, post_div = 0;
+	int max_div = master_data->spi_ver_def->max_data_rate + 1;
+	
+	if (clk_src > baud) {
+	    pre_div = clk_src / baud;
+	    
+	    if (pre_div > max_div) {
+
+		/* We need to divide by more than 16 */
+		post_div = pre_div / max_div;
+		pre_div = master_data->spi_ver_def->max_data_rate;
+
+		for (i = 0; i < max_div; i++) {
+		    if ((1 << i) >= post_div)
+			break;
+		}
+		if (i == max_div) {
+		    printk(KERN_ERR "SPI error: no divider can meet the freq: %d\n",
+			   baud);
+		    /* Smallest value */
+		    pre_div = post_div = master_data->spi_ver_def->max_data_rate;
+		} else {
+		    post_div = i;
+		}
+	    }
+	}
+	
+	return (((pre_div << 4) | post_div) << master_data->spi_ver_def->data_shift);
+
+    } else {
+	int lim = 0;
+	unsigned int div = 0;
+
+	if (clk_src > baud) {
+	    lim = clk_src / baud;
+
+	    /* controller divider value is 2^(n+2) */
+	    while (div <= master_data->spi_ver_def->max_data_rate) {
+		if (lim <= (0x1 << (div + 2))) {
+		    break;
+		}
+
+		div++;
+	    }
+	    if (div > master_data->spi_ver_def->max_data_rate) {
+		printk(KERN_ERR "SPI error: no divider can meet the freq: %d\n",
+		       baud);
+		/* Smallest value */
+		div = master_data->spi_ver_def->max_data_rate;
+	    }
+	}
+
+	return (div << master_data->spi_ver_def->data_shift);
+    }
+
+
+    return 0;
 }
 
 /*!
@@ -750,7 +832,10 @@ static irqreturn_t mxc_spi_isr(int irq, void *dev_id)
 					master_drv_data);
 		}
 	} else {
-		complete(&master_drv_data->xfer_done);
+	    /* Clear the TC bit */
+	    __raw_writel((MXC_CSPISTAT_RO | MXC_CSPISTAT_TC), 
+			 master_drv_data->stat_addr);
+	    complete(&master_drv_data->xfer_done);
 	}
 
 	return ret;
@@ -764,17 +849,23 @@ static irqreturn_t mxc_spi_isr(int irq, void *dev_id)
  */
 int mxc_spi_setup(struct spi_device *spi)
 {
-	if (spi->max_speed_hz < 0) {
-		return -EINVAL;
-	}
+    struct mxc_spi *master_drv_data = spi_master_get_devdata(spi->master);
+	
+    if (spi->max_speed_hz < 0) {
+	return -EINVAL;
+    }
 
-	if (!spi->bits_per_word)
-		spi->bits_per_word = 8;
+    if (spi->bits_per_word > (master_drv_data->spi_ver_def->fifo_size * 8 * 4)) {
+	printk("ECSPI error: burst size too large!\n");
+	return -1;
+    } else if (!spi->bits_per_word) {
+	spi->bits_per_word = 8;
+    }
 
-	pr_debug("%s: mode %d, %u bpw, %d hz\n", __FUNCTION__,
-		 spi->mode, spi->bits_per_word, spi->max_speed_hz);
+    pr_debug("%s: mode %d, %u bpw, %d hz\n", __FUNCTION__,
+	     spi->mode, spi->bits_per_word, spi->max_speed_hz);
 
-	return 0;
+    return 0;
 }
 
 static int mxc_spi_setup_transfer(struct spi_device *spi, struct spi_transfer *t)
@@ -831,8 +922,15 @@ int mxc_spi_poll_transfer(struct spi_device *spi, struct spi_transfer *t)
 		spi_ver_def->rx_cnt_off) != count) ;
 
 	for (i = 0; i < count; i++) {
-		rx_tmp = __raw_readl(master_drv_data->base + MXC_CSPIRXDATA);
-		master_drv_data->transfer.rx_get(master_drv_data, rx_tmp);
+	    
+	    /* wait for RR bit to be set */
+	    while ((__raw_readl(master_drv_data->stat_addr) & MXC_CSPISTAT_RR) == 0);
+	    
+	    rx_tmp = __raw_readl(master_drv_data->base + MXC_CSPIRXDATA);
+
+	    master_drv_data->transfer.rx_get(master_drv_data, rx_tmp);
+	    (master_drv_data->transfer.count)--;
+	    (master_drv_data->transfer.rx_count)--;
 	}
 
 	clk_disable(master_drv_data->clk);
@@ -841,7 +939,7 @@ int mxc_spi_poll_transfer(struct spi_device *spi, struct spi_transfer *t)
 						     chipselect_status,
 						     (spi->chip_select &
 						      MXC_CSPICTRL_CSMASK) + 1);
-	return 0;
+	return (t->len - master_drv_data->transfer.count);
 }
 
 /*!
@@ -868,15 +966,23 @@ int mxc_spi_transfer(struct spi_device *spi, struct spi_transfer *t)
 
 	chipselect_status = __raw_readl(MXC_CSPICONFIG +
 					master_drv_data->ctrl_addr);
+	
 	chipselect_status >>= master_drv_data->spi_ver_def->ss_pol_shift &
 	    master_drv_data->spi_ver_def->mode_mask;
-	if (master_drv_data->chipselect_active)
-		master_drv_data->chipselect_active(spi->master->bus_num,
+	if (master_drv_data->chipselect_active) {
+
+	    master_drv_data->chipselect_active(spi->master->bus_num,
 						   chipselect_status,
 						   (spi->chip_select &
 						    MXC_CSPICTRL_CSMASK) + 1);
+	}
 
 	clk_enable(master_drv_data->clk);
+
+	/* Make sure the TC bit has been cleared */
+	__raw_writel((MXC_CSPISTAT_RO | MXC_CSPISTAT_TC), 
+		     master_drv_data->stat_addr);
+	
 	/* Modify the Tx, Rx, Count */
 	master_drv_data->transfer.tx_buf = t->tx_buf;
 	master_drv_data->transfer.rx_buf = t->rx_buf;
@@ -888,7 +994,7 @@ int mxc_spi_transfer(struct spi_device *spi, struct spi_transfer *t)
 
 	spi_enable_interrupt(master_drv_data,
 			     1 << (MXC_CSPIINT_RREN_SHIFT +
-				   master_drv_data->spi_ver_def->rx_inten_dif));
+				    master_drv_data->spi_ver_def->rx_inten_dif));
 	count = (t->len > fifo_size) ? fifo_size : t->len;
 
 	/* Perform Tx transaction */
@@ -903,7 +1009,7 @@ int mxc_spi_transfer(struct spi_device *spi, struct spi_transfer *t)
 	spi_disable_interrupt(master_drv_data,
 			      1 << (MXC_CSPIINT_RREN_SHIFT +
 				    master_drv_data->spi_ver_def->
-				    rx_inten_dif));
+				     rx_inten_dif));
 
 	clk_disable(master_drv_data->clk);
 	if (master_drv_data->chipselect_inactive)
@@ -1003,7 +1109,13 @@ static int mxc_spi_probe(struct platform_device *pdev)
 	/* Set the master bitbang data */
 
 	master_drv_data->mxc_bitbang.chipselect = mxc_spi_chipselect;
-	master_drv_data->mxc_bitbang.txrx_bufs = mxc_spi_transfer;
+
+	/* BEN - use poll mode for ecspi due to interrupt issues */
+	if (spi_ver == 23)
+	    master_drv_data->mxc_bitbang.txrx_bufs = mxc_spi_poll_transfer;
+	else
+	    master_drv_data->mxc_bitbang.txrx_bufs = mxc_spi_transfer;
+
 	master_drv_data->mxc_bitbang.master->setup = mxc_spi_setup;
 	master_drv_data->mxc_bitbang.master->cleanup = mxc_spi_cleanup;
 	master_drv_data->mxc_bitbang.setup_transfer = mxc_spi_setup_transfer;
@@ -1227,6 +1339,8 @@ static int mxc_spi_suspend(struct platform_device *pdev, pm_message_t state)
 	struct mxc_spi *master_drv_data = spi_master_get_devdata(master);
 	int ret = 0;
 
+	mxc_spi_suspended = 1;
+
 	spi_bitbang_suspend(&master_drv_data->mxc_bitbang);
 	clk_enable(master_drv_data->clk);
 	__raw_writel(MXC_CSPICTRL_DISABLE,
@@ -1257,6 +1371,8 @@ static int mxc_spi_resume(struct platform_device *pdev)
 	__raw_writel(master_drv_data->spi_ver_def->spi_enable,
 		     master_drv_data->base + MXC_CSPICTRL);
 	clk_disable(master_drv_data->clk);
+
+	mxc_spi_suspended = 0;
 	return 0;
 }
 #else

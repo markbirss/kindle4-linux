@@ -2,7 +2,6 @@
  *  linux/drivers/mmc/host/mx_sdhci.h - Secure Digital Host
  *  Controller Interface driver
  *
- *  Copyright (C) 2005-2007 Pierre Ossman, All Rights Reserved.
  *  Copyright (C) 2008-2010 Freescale Semiconductor, Inc. All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -28,9 +27,11 @@
 #define  SDHCI_TRNS_DMA		0x00000001
 #define  SDHCI_TRNS_BLK_CNT_EN	0x00000002
 #define  SDHCI_TRNS_ACMD12	0x00000004
+#define  SDHCI_TRNS_DDR_EN 	0x00000008
 #define  SDHCI_TRNS_READ	0x00000010
 #define  SDHCI_TRNS_MULTI	0x00000020
 #define  SDHCI_TRNS_DPSEL	0x00200000
+#define SDHCI_TRNS_ABORTCMD	0x00C00000
 #define  SDHCI_TRNS_MASK	0xFFFF0000
 
 #define SDHCI_COMMAND		0x0E
@@ -44,7 +45,7 @@
 #define  SDHCI_CMD_RESP_SHORT	0x02
 #define  SDHCI_CMD_RESP_SHORT_BUSY 0x03
 
-#define SDHCI_MAKE_CMD(c, f) (((c & 0xff) << 8) | (f & 0xff)) << 16
+#define SDHCI_MAKE_CMD(c, f) ((((c & 0xff) << 8) | (f & 0xff)) << 16)
 
 #define SDHCI_RESPONSE		0x10
 
@@ -54,6 +55,7 @@
 #define  SDHCI_CMD_INHIBIT	0x00000001
 #define  SDHCI_DATA_INHIBIT	0x00000002
 #define  SDHCI_DATA_ACTIVE 	0x00000004
+#define  SDHCI_CLOCK_GATED 	0x00000080
 #define  SDHCI_DOING_WRITE	0x00000100
 #define  SDHCI_DOING_READ	0x00000200
 #define  SDHCI_SPACE_AVAILABLE	0x00000400
@@ -69,6 +71,7 @@
 #define  SDHCI_CTRL_4BITBUS	0x00000002
 #define  SDHCI_CTRL_8BITBUS	0x00000004
 #define  SDHCI_CTRL_HISPD	0x00000004
+#define  SDHCI_CTRL_CDSS       0x80
 #define  SDHCI_CTRL_DMA_MASK	0x18
 #define   SDHCI_CTRL_SDMA	0x00
 #define   SDHCI_CTRL_ADMA1	0x08
@@ -77,7 +80,9 @@
 #define  SDHCI_CTRL_D3CD 	0x00000008
 #define  SDHCI_CTRL_ADMA 	0x00000100
 /* wake up control */
-#define  SDHCI_CTRL_WECINS 	0x04000000
+#define  SDHCI_CTRL_WECREM 	0x04000000
+#define  SDHCI_CTRL_WECINS 	0x02000000
+#define  SDHCI_CTRL_WECINT 	0x01000000
 
 #define SDHCI_POWER_CONTROL	0x29
 #define  SDHCI_POWER_ON		0x01
@@ -95,6 +100,7 @@
 #define  SDHCI_CLOCK_PER_EN	0x00000004
 #define  SDHCI_CLOCK_HLK_EN	0x00000002
 #define  SDHCI_CLOCK_IPG_EN	0x00000001
+#define  SDHCI_CLOCK_SDCLKFS1 	0x00000100
 #define  SDHCI_CLOCK_MASK 	0x0000FFFF
 
 #define SDHCI_TIMEOUT_CONTROL	0x2E
@@ -188,6 +194,18 @@
 #define SDHCI_ADMA_ADDRESS	0x58
 
 /* 60-FB reserved */
+#define SDHCI_DLL_CONTROL 	0x60
+#define DLL_CTRL_ENABLE 	0x00000001
+#define DLL_CTRL_RESET 		0x00000002
+#define DLL_CTRL_SLV_FORCE_UPD 	0x00000004
+#define DLL_CTRL_SLV_OVERRIDE	0x00000200
+#define DLL_CTRL_SLV_DLY_TAR 	0x00000000
+#define DLL_CTRL_SLV_UP_INT 	0x00200000
+#define DLL_CTRL_REF_UP_INT 	0x20000000
+
+#define SDHCI_DLL_STATUS 	0x64
+#define DLL_STS_SLV_LOCK 	0x00000001
+#define DLL_STS_REF_LOCK 	0x00000002
 
 /* ADMA Addr Descriptor Attribute Filed */
 enum {
@@ -199,6 +217,7 @@ enum {
 	FSL_ADMA_DES_ATTR_LINK = 0x30,
 };
 
+#define SDHCI_VENDOR_SPEC	0xC0
 #define SDHCI_HOST_VERSION	0xFC
 #define  SDHCI_VENDOR_VER_MASK	0xFF00
 #define  SDHCI_VENDOR_VER_SHIFT	8
@@ -207,6 +226,7 @@ enum {
 #define   SDHCI_SPEC_100	0
 #define   SDHCI_SPEC_200	1
 #define   ESDHC_VENDOR_V22 	0x12
+#define   ESDHC_VENDOR_V3 	0x13
 
 struct sdhci_chip;
 
@@ -228,6 +248,7 @@ struct sdhci_host {
 #define SDHCI_CD_PRESENT 	(1<<8)	/* CD present */
 #define SDHCI_WP_ENABLED	(1<<9)	/* Write protect */
 #define SDHCI_CD_TIMEOUT 	(1<<10)	/* cd timer is expired */
+#define SDHCI_IN_4BIT_MODE	(1<<4)	/* bus is in 4-bit mode */
 
 	unsigned int max_clk;	/* Max possible freq (MHz) */
 	unsigned int min_clk;	/* Min possible freq (MHz) */
@@ -264,10 +285,12 @@ struct sdhci_host {
 	void __iomem *ioaddr;	/* Mapped address */
 
 	struct tasklet_struct card_tasklet;	/* Tasklet structures */
-	struct tasklet_struct finish_tasklet;
+	struct workqueue_struct *workqueue;
+	struct work_struct finish_wq;
 	struct work_struct cd_wq;	/* card detection work queue */
 	/* Platform specific data */
 	struct mxc_mmc_platform_data *plat_data;
+	int transfer_in_progress;
 
 	struct timer_list timer;	/* Timer for timeouts */
 	struct timer_list cd_timer;	/* Timer for cd */
@@ -281,3 +304,4 @@ struct sdhci_chip {
 	int num_slots;		/* Slots on controller */
 	struct sdhci_host *hosts[0];	/* Pointers to hosts */
 };
+

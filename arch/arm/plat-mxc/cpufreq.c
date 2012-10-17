@@ -31,6 +31,7 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/io.h>
+#include <linux/sched.h>
 #include <mach/hardware.h>
 #include <asm/setup.h>
 #include <mach/clock.h>
@@ -89,7 +90,15 @@ int set_cpu_freq(int freq)
 			return ret;
 		}
 	}
-	
+
+#ifdef CONFIG_MACH_MX50_YOSHIME
+	/*
+	 * Yoshime needs this delay. At 800MHz, CPU voltage is 1050mV,
+	 * at 160MHz, it is 950mV. Ripley's stepping is 12.5mV per 8uS.
+	 * So, 8 blocks of 12.5mV which is 64uS. Hence, adding a 100uS
+	 * delay here */
+	udelay(100);
+#endif
 	ret = clk_set_rate(cpu_clk, freq);
 	if (ret != 0) {
 		printk(KERN_DEBUG "cannot set CPU clock rate\n");
@@ -153,6 +162,9 @@ static int mxc_set_target(struct cpufreq_policy *policy,
 	int low_freq_bus_ready = 0;
 	int ret = 0;
 
+	if (cpufreq_suspended == 1)
+		return ret;
+
 	if (dvfs_core_is_active || cpufreq_suspended) {
 		target_freq = clk_get_rate(cpu_clk) / 1000;
 		freq_Hz = calc_frequency_khz(target_freq, relation) * 1000;
@@ -190,10 +202,10 @@ static int mxc_set_target(struct cpufreq_policy *policy,
 	if (!dvfs_core_is_active) {
 		if ((freq_Hz == arm_lpm_clk) && (!low_bus_freq_mode)
 		    && (low_freq_bus_ready)) {
-			if (freqs.old != freqs.new)
+			if (freqs.old != freqs.new) {
 				ret = set_cpu_freq(freq_Hz);
+			}
 			set_low_bus_freq();
-
 		} else {
 			set_high_bus_freq(0);
 			ret = set_cpu_freq(freq_Hz);
@@ -257,8 +269,13 @@ static int __init mxc_cpufreq_driver_init(struct cpufreq_policy *policy)
 	arm_lpm_clk = cpu_freq_khz_min * 1000;
 	arm_normal_clk = cpu_freq_khz_max * 1000;
 
-	/* Manual states, that PLL stabilizes in two CLK32 periods */
-	policy->cpuinfo.transition_latency = 10;
+	/* 80us since we get in and out of LPAPM mode */
+#ifdef CONFIG_MACH_MX50_YOSHIME
+	/* Problem with fast switching on Ripley */
+	policy->cpuinfo.transition_latency = 200 * 1000;
+#else
+	policy->cpuinfo.transition_latency = 80 * 1000;
+#endif
 
 	ret = cpufreq_frequency_table_cpuinfo(policy, imx_freq_table);
 
@@ -277,11 +294,13 @@ static int __init mxc_cpufreq_driver_init(struct cpufreq_policy *policy)
 static int mxc_cpufreq_suspend(struct cpufreq_policy *policy,
 				     pm_message_t state)
 {
+	cpufreq_suspended = 1;
 	return 0;
 }
 
 static int mxc_cpufreq_resume(struct cpufreq_policy *policy)
 {
+	cpufreq_suspended = 0;
 	return 0;
 }
 

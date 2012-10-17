@@ -395,4 +395,24 @@ config KEYBOARD_MC9S08DZ60
 	help
 	 -to be written-
 
+config KEYBOARD_TEQUILA
+	tristate "Tequila GPIO driver for Keypad and Fiveway"
+	depends on GENERIC_GPIO
+	depends on MACH_MX50_TEQUILA || MACH_MX50_YOSHI
+	help
+	  Enable support for GPIO driven matrix keypad.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called tequila_keypad.
+
+config KEYBOARD_WHITNEY
+	tristate "Whitney HOME button driver"
+	depends on GENERIC_GPIO
+	depends on MACH_MX50_TEQUILA || MACH_MX50_YOSHI
+	help
+	  Enable support for Whitney board HOME Button
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called whitney_button
+
 endif

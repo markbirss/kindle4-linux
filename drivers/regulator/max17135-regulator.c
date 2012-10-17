@@ -333,6 +333,8 @@ static int max17135_vcom_set_voltage(struct regulator_dev *reg,
 		return i2c_smbus_write_byte_data(client,
 			REG_MAX17135_PRGM_CTRL, reg_val);
 	}
+
+	return 0;
 }
 
 static int max17135_vcom_get_voltage(struct regulator_dev *reg)

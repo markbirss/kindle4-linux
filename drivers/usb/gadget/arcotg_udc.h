@@ -1,19 +1,16 @@
 /*
- * Copyright (C) 2009-2010 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright (C) 2004-2008 Freescale Semiconductor, Inc. All Rights Reserved.
+ * Copyright (C) 2009-2011 Amazon Technologies Inc. All Rights Reserved.
+ * Manish Lachwani (lachwani@lab126.com).
+ */
+
+/*
+ * The code contained herein is licensed under the GNU General Public
+ * License. You may obtain a copy of the GNU General Public License
+ * Version 2 or later at the following locations:
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * http://www.opensource.org/licenses/gpl-license.html
+ * http://www.gnu.org/copyleft/gpl.html
  */
 
 /*!
@@ -25,36 +22,30 @@
 #ifndef __ARCOTG_UDC_H
 #define __ARCOTG_UDC_H
 
-#include <mach/hardware.h>
-
 #define TRUE 1
 #define FALSE 0
 
 #define MSC_BULK_CB_WRAP_LEN 31
-#ifdef CONFIG_ARCH_MXC
-#define USE_MSC_WR(len) (((cpu_is_mx37_rev(CHIP_REV_1_0) == 1) ||\
-	(cpu_is_mx51_rev(CHIP_REV_2_0) < 0)) && ((len) == MSC_BULK_CB_WRAP_LEN))
-#else
-#define USE_MSC_WR(len) false
-#endif
+#define USE_MSC_WR(len) 0
 
-/* Iram patch */
 #ifdef CONFIG_USB_STATIC_IRAM_PPH
-/* size of 1 qTD's buffer,one is for BULK IN and other is BULK OUT */
 #define IRAM_TD_PPH_SIZE	(USB_IRAM_SIZE / 2)
-#define IRAM_PPH_NTD	2	/* number of TDs in IRAM  */
+#define IRAM_PPH_NTD		2
 #else
 #define IRAM_TD_PPH_SIZE	0
-#define IRAM_PPH_NTD	0
+#define IRAM_PPH_NTD		0
 #endif
 
+#ifndef USB_IRAM_BASE_ADDR
+#define USB_IRAM_BASE_ADDR	0
+#endif
+
+/* Don't use IRAM if it is already being used by Sound */
+#ifdef CONFIG_SND_MXC_SOC_IRAM
+#define NEED_IRAM(ep)		0
+#else
 #define NEED_IRAM(ep) ((g_iram_size) && \
 	((ep)->desc->bmAttributes == USB_ENDPOINT_XFER_BULK))
-
-#ifdef CONFIG_ARCH_MX5
-#define POSTPONE_FREE_LAST_DTD
-#else
-#undef POSTPONE_FREE_LAST_DTD
 #endif
 
 /* ### define USB registers here
@@ -103,16 +94,6 @@ struct usb_dr_device {
 	u32 endptstatus;	/* Endpoint Status Register */
 	u32 endptcomplete;	/* Endpoint Complete Register */
 	u32 endptctrl[8 * 2];	/* Endpoint Control Registers */
-	u32 res8[256];
-#ifdef CONFIG_ARCH_MX5
-	u32 res9[128];		/* i.MX51 start from 0x800 */
-#endif
-	u32 usbctrl;
-	u32 otgmirror;
-	u32 phyctrl0;
-	u32 phyctrl1;
-	u32 ctrl1;
-	u32 uh2ctrl;
 };
 
  /* non-EHCI USB system interface registers (Big Endian) */
@@ -222,6 +203,7 @@ struct usb_sys_interface {
 #define  PORTSCX_PORT_FORCE_RESUME            (0x00000040)
 #define  PORTSCX_PORT_SUSPEND                 (0x00000080)
 #define  PORTSCX_PORT_RESET                   (0x00000100)
+#define  PORTSCX_PORT_HSP                     (0x00000200) 
 #define  PORTSCX_LINE_STATUS_BITS             (0x00000C00)
 #define  PORTSCX_PORT_POWER                   (0x00001000)
 #define  PORTSCX_PORT_INDICTOR_CTRL           (0x0000C000)
@@ -264,11 +246,6 @@ struct usb_sys_interface {
 #define  PORTSCX_PORT_SPEED_HIGH              (0x08000000)
 #define  PORTSCX_PORT_SPEED_UNDEF             (0x0C000000)
 #define  PORTSCX_SPEED_BIT_POS                (26)
-
-/* OTGSC Register Bit Masks */
-#define  OTGSC_B_SESSION_VALID_IRQ_EN           (1 << 27)
-#define  OTGSC_B_SESSION_VALID_IRQ_STS          (1 << 19)
-#define  OTGSC_B_SESSION_VALID                  (1 << 11)
 
 /* bit 28 is parallel transceiver width for UTMI interface */
 #define  PORTSCX_PTW                          (0x10000000)
@@ -358,17 +335,7 @@ struct usb_sys_interface {
 /* control Register Bit Masks */
 #define  USB_CTRL_IOENB                       (0x00000004)
 #define  USB_CTRL_ULPI_INT0EN                 (0x00000001)
-#define  USB_CTRL_OTG_WUIR                   (0x80000000)
-#define  USB_CTRL_OTG_WUIE                   (0x08000000)
-#define  USB_CTRL_OTG_VWUE			(0x00001000)
-#define  USB_CTRL_OTG_IWUE			(0x00100000)
 
-/* PHY control0 Register Bit Masks */
-#define	PHY_CTRL0_CONF2			(1 << 26)
-
-/* USB UH2 CTRL Register Bits */
-#define USB_UH2_OVBWK_EN		(1 << 6) /* OTG VBUS Wakeup Enable */
-#define USB_UH2_OIDWK_EN		(1 << 5) /* OTG ID Wakeup Enable */
 /*!
  * Endpoint Queue Head data struct
  * Rem: all the variables of qh are LittleEndian Mode
@@ -554,11 +521,10 @@ struct fsl_req {
 	struct ep_td_struct *head, *tail;	/* For dTD List
 						   this is a BigEndian Virtual addr */
 	unsigned int dtd_count;
-	/* just for IRAM patch */
-	dma_addr_t oridma;	/* original dma */
-	size_t buffer_offset;	/* offset of user buffer */
-	int last_one;		/* mark if reach to last packet */
-	struct ep_td_struct *cur;	/* current tranfer dtd */
+	dma_addr_t oridma;      /* original dma */
+	size_t buffer_offset;   /* offset of user buffer */
+	int last_one;           /* mark if reach to last packet */
+	struct ep_td_struct *cur;       /* current tranfer dtd */
 };
 
 #define REQ_UNCOMPLETE		(1)
@@ -594,11 +560,10 @@ struct fsl_udc {
 	unsigned vbus_active:1;
 	unsigned stopped:1;
 	unsigned remote_wakeup:1;
-	unsigned already_stopped:1;
+	unsigned suspended:1;
 
 	struct ep_queue_head *ep_qh;	/* Endpoints Queue-Head */
 	struct fsl_req *status_req;	/* ep0 status request */
-	struct fsl_req *data_req;	/* ep0 data request */
 	struct dma_pool *td_pool;	/* dma pool for DTD */
 	enum fsl_usb2_phy_modes phy_mode;
 
@@ -611,6 +576,7 @@ struct fsl_udc {
 	u32 resume_state;	/* USB state to resume */
 	u32 usb_state;		/* USB current state */
 	u32 usb_next_state;	/* USB next state */
+	u32 ep0_state;		/* Endpoint zero state */
 	u32 ep0_dir;		/* Endpoint zero direction: can be
 				   USB_DIR_IN or USB_DIR_OUT */
 	u32 usb_sof_count;	/* SOF count */
@@ -618,6 +584,19 @@ struct fsl_udc {
 	u8 device_address;	/* Device USB address */
 
 	struct completion *done;	/* to make sure release() is done */
+	struct delayed_work init_charger_detect_work;
+
+	struct work_struct usbtest_work;	/* USB test mode workqueue handler */
+	struct timer_list timer;		/* Main charger timer fn */
+
+	int lobathi;				/*LOBATH event */
+	int lobatli;				/* LOBATL event */
+
+#ifdef CONFIG_DEBUG_FS
+	struct dentry *debugfs_root;
+	struct dentry *debugfs_state;
+#endif
+
 	u32 iram_buffer[IRAM_PPH_NTD];
 	void *iram_buffer_v[IRAM_PPH_NTD];
 };
@@ -697,8 +676,7 @@ static void dump_msg(const char *label, const u8 * buf, unsigned int length)
 /* Bulk only class request */
 #define USB_BULK_RESET_REQUEST          0xff
 
-#if defined(CONFIG_ARCH_MXC) || defined(CONFIG_ARCH_STMP3XXX) || \
-	defined(CONFIG_ARCH_MXS)
+#ifdef CONFIG_ARCH_MXC
 #include <mach/fsl_usb_gadget.h>
 #elif CONFIG_PPC32
 #include <asm/fsl_usb_gadget.h>

@@ -24,7 +24,6 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/device.h>
-
 #include <linux/usb/composite.h>
 
 
@@ -413,6 +412,7 @@ static int set_config(struct usb_composite_dev *cdev,
 	if (!c)
 		goto done;
 
+	gadget->configured = 1;
 	cdev->config = c;
 
 	/* Initialize all interfaces by setting them to altsetting zero. */
@@ -810,11 +810,14 @@ unknown:
 		 */
 		if ((ctrl->bRequestType & USB_RECIP_MASK)
 				== USB_RECIP_INTERFACE) {
-			f = cdev->config->interface[intf];
-			if (f && f->setup)
-				value = f->setup(f, ctrl);
-			else
-				f = NULL;
+			
+			if (cdev->config) {
+				f = cdev->config->interface[intf];
+				if (f && f->setup)
+					value = f->setup(f, ctrl);
+				else
+					f = NULL;
+			}
 		}
 		if (value < 0 && !f) {
 			struct usb_configuration	*c;
@@ -899,6 +902,8 @@ composite_unbind(struct usb_gadget *gadget)
 	}
 	if (composite->unbind)
 		composite->unbind(cdev);
+
+	gadget->configured = 0;
 
 	if (cdev->req) {
 		kfree(cdev->req->buf);

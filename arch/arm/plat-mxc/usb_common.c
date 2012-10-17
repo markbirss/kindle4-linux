@@ -246,7 +246,7 @@ static void usbh1_set_ulpi_xcvr(void)
 	USBCTRL &= ~UCTRL_H1WIE; /* HOST1 wakeup intr disable */
 	USBCTRL &= ~UCTRL_H1UIE; /* Host1 ULPI interrupt disable */
 	USBCTRL |= UCTRL_H1PM; /* HOST1 power mask */
-	USB_PHY_CTR_FUNC |= USB_UH1_OC_DIS; /* OC is not used */
+	USB_PHY_CTR_FUNC |= USB_UH1_OC_DIS | USB_UTMI_PHYCTRL_OC_DIS; /* OC is not used */
 
 	/* Interrupt Threshold Control:Immediate (no threshold) */
 	UH1_USBCMD &= UCMD_ITC_NO_THRESHOLD;
@@ -280,13 +280,13 @@ static void usbh1_set_utmi_xcvr(void)
 	 */
 	USBCTRL &= ~UCTRL_H1PM;	/* Host1 Power Mask */
 	USBCTRL &= ~UCTRL_H1WIE; /* Host1 Wakeup Intr Disable */
-	USB_PHY_CTR_FUNC |= USB_UH1_OC_DIS; /* Over current disable */
+	USB_PHY_CTR_FUNC |= USB_UH1_OC_DIS | USB_UTMI_PHYCTRL_OC_DIS; /* Over current disable */
 
-	if (machine_is_mx50_arm2()) {
+	if (machine_is_mx50_yoshi()) {
 		USBCTRL |= UCTRL_H1PM; /* Host1 Power Mask */
 		USB_PHY_CTR_FUNC &= ~USB_UH1_OC_DIS; /* Over current enable */
 		/* Over current polarity low active */
-		USB_PHY_CTR_FUNC |= USB_UH1_OC_POL;
+		USB_PHY_CTR_FUNC |= USB_UH1_OC_POL | USB_UTMI_PHYCTRL_OC_DIS;
 	}
 	/* set UTMI xcvr */
 	tmp = UH1_PORTSC1 & ~PORTSC_PTS_MASK;
@@ -432,14 +432,7 @@ static int usb_register_remote_wakeup(struct platform_device *pdev)
 	int irq;
 
 	pr_debug("%s: pdev=0x%p \n", __func__, pdev);
-	if (!cpu_is_mx51() && !cpu_is_mx25())
-		return -ECANCELED;
-
-	/* The Host2 USB controller On mx25 platform
-	 * is no path available from internal USB FS
-	 * PHY to FS PHY wake up interrupt, So to
-	 * remove the function of USB Remote Wakeup on Host2 */
-	if (cpu_is_mx25() && (!strcmp("Host 2", pdata->name)))
+	if (!(pdata->wake_up_enable))
 		return -ECANCELED;
 
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -697,8 +690,7 @@ static void otg_set_utmi_xcvr(void)
 	UOG_USBCMD |= UCMD_RESET;
 	while ((UOG_USBCMD) & (UCMD_RESET)) ;
 
-	if (cpu_is_mx53())
-		USB_PHY_CTR_FUNC |= USB_UTMI_PHYCTRL_OC_DIS;
+	USB_PHY_CTR_FUNC |= USB_UTMI_PHYCTRL_OC_DIS;
 
 	if (cpu_is_mx51()) {
 		if (machine_is_mx51_3ds()) {
@@ -715,7 +707,7 @@ static void otg_set_utmi_xcvr(void)
 		USBCTRL &= ~UCTRL_PP;
 	} else if (cpu_is_mx50()) {
 		USB_PHY_CTR_FUNC |= USB_UTMI_PHYCTRL_OC_DIS;
-		if (machine_is_mx50_arm2())
+		if (machine_is_mx50_yoshi())
 			/* OTG Power pin polarity low */
 			USBCTRL |= UCTRL_O_PWR_POL;
 	} else {
@@ -852,6 +844,21 @@ int usbotg_init(struct platform_device *pdev)
 	return 0;
 }
 EXPORT_SYMBOL(usbotg_init);
+
+static struct resource *otg_resources;
+
+struct resource *otg_get_resources(void)
+{
+        return otg_resources;
+}
+EXPORT_SYMBOL(otg_get_resources);
+
+int otg_set_resources(struct resource *resources)
+{
+        otg_resources = resources;
+        return 0;
+}
+EXPORT_SYMBOL(otg_set_resources);
 
 void usbotg_uninit(struct fsl_usb2_platform_data *pdata)
 {

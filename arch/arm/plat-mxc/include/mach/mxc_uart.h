@@ -155,6 +155,8 @@ typedef struct {
 	 * DMA ID for receive
 	 */
 	mxc_dma_device_t dma_rx_id;
+
+	int uart_clk_gating;
 } uart_mxc_port;
 
 /* Address offsets of the UART registers */

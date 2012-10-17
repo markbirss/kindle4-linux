@@ -193,6 +193,7 @@ extern unsigned int system_rev;
 #define cpu_is_mx37_rev(rev) cpu_rev(mx37, rev)
 #define cpu_is_mx51_rev(rev) cpu_rev(mx51, rev)
 #define cpu_is_mx53_rev(rev) cpu_rev(mx53, rev)
+#define cpu_is_mx50_rev(rev) cpu_rev(mx50, rev)
 
 
 #include <linux/types.h>
@@ -235,6 +236,7 @@ struct mxc_ipu_config {
 	int rev;
 	void (*reset) (void);
 	struct clk *di_clk[2];
+	struct clk *csi_clk[2];
 };
 
 struct mxc_ir_platform_data {
@@ -317,6 +319,28 @@ struct mxc_lcd_platform_data {
 	void (*reset) (void);
 };
 
+struct mxc_epdc_fb_mode {
+	struct fb_videomode *vmode;
+	int vscan_holdoff;
+	int sdoed_width;
+	int sdoed_delay;
+	int sdoez_width;
+	int sdoez_delay;
+	int gdclk_hp_offs;
+	int gdsp_offs;
+	int gdoe_offs;
+	int gdclk_offs;
+	int num_ce;
+};
+
+struct mxc_epdc_fb_platform_data {
+	struct mxc_epdc_fb_mode *epdc_mode;
+	int num_modes;
+	void (*get_pins) (void);
+	void (*put_pins) (void);
+	void (*enable_pins) (void);
+	void (*disable_pins) (void);
+};
 
 struct mxc_tsc_platform_data {
 	char *vdd_reg;
@@ -582,6 +606,15 @@ struct imx_nfc_platform_data {
 	unsigned int	      partition_count;
 };
 
+struct mxc_sx5844_platform_data {
+	char *reg_dvdd_io;
+	char *reg_avdd;
+	void (*gpio_pin_get) (void);
+	void (*gpio_pin_put) (void);
+	int int1;
+	int int2;
+};
+
 extern void mxc_wd_reset(void);
 unsigned long board_get_ckih_rate(void);
 
@@ -603,6 +636,12 @@ struct mxc_sim_platform_data {
 	unsigned int detect; /* 1 have detect pin, 0 not */
 };
 
+struct mxs_dma_plat_data {
+	unsigned int burst8:1;
+	unsigned int burst:1;
+	unsigned int chan_base;
+	unsigned int chan_num;
+};
 #endif				/* __ASSEMBLY__ */
 
 #define MUX_IO_P		29

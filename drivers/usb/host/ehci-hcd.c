@@ -1,6 +1,9 @@
 /*
  * Copyright (c) 2000-2004 by David Brownell
  *
+ * Added support for Ehci low power idle mode.
+ * Copyright (c) 2010-2011 Manish Lachwani (lachwani@amazon.com)
+ *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
@@ -35,6 +38,7 @@
 #include <linux/moduleparam.h>
 #include <linux/dma-mapping.h>
 #include <linux/debugfs.h>
+#include <linux/clk.h>
 
 #include "../core/hcd.h"
 
@@ -43,6 +47,12 @@
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/unaligned.h>
+
+#include <mach/clock.h>
+#include <mach/arc_otg.h>
+
+/* WAN wakeup callback */
+#include <mach/mwan.h>
 
 /*-------------------------------------------------------------------------*/
 
@@ -283,12 +293,458 @@ static void ehci_quiesce (struct ehci_hcd *ehci)
 				    STS_ASS | STS_PSS, 0, 16 * 125);
 }
 
-/*-------------------------------------------------------------------------*/
+#define PORT_WAKE_BITS	(PORT_WKOC_E|PORT_WKDISC_E|PORT_WKCONN_E)
+
+/*
+ * USB EHCI low power idle mode.
+ */
+extern int wakeup_value;                        /* Enter IDLE or not */
+#define EHCI_IDLE_SAMPLING_RATE         1000    /* time (ms) between idle loop iterations */
+
+atomic_t ehci_irq_last_count = ATOMIC_INIT(0);
+atomic_t ehci_irq_current_count = ATOMIC_INIT(0);
+static int kick_off_delayed_work = 0;
+struct ehci_hcd *ehci_low_power;
+
+static void ehci_idle_count(struct work_struct *unused);
+atomic_t suspended = ATOMIC_INIT(0);
+static struct clk *usb_ahb_clk;
+
+int suspend_count = 0;
+EXPORT_SYMBOL(suspend_count);
 
 static void end_unlink_async(struct ehci_hcd *ehci);
 static void ehci_work(struct ehci_hcd *ehci);
 
 #include "ehci-hub.c"
+
+/* Ehci Low Power Idle */
+static int ehci_idle_bus_suspend (struct usb_hcd *hcd)
+{
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	int 			port;
+	int			mask;
+
+	if (time_before (jiffies, ehci->next_statechange))
+		mdelay(15);
+
+	del_timer_sync(&ehci->watchdog);
+	del_timer_sync(&ehci->iaa_watchdog);
+
+	port = HCS_N_PORTS (ehci->hcs_params);
+
+	if (HC_IS_RUNNING(hcd->state)) {
+		ehci_quiesce (ehci);
+		hcd->state = HC_STATE_QUIESCING;
+	}
+
+	ehci->command = ehci_readl(ehci, &ehci->regs->command);
+	ehci_work(ehci);
+
+	ehci->bus_suspended = 0;
+	ehci->owned_ports = 0;
+
+	while (port--) {
+		u32 __iomem	*reg = &ehci->regs->port_status [port];
+		u32		t1 = ehci_readl(ehci, reg) & ~PORT_RWC_BITS;
+		u32		t2 = t1;
+
+		if (t1 & PORT_OWNER)
+			set_bit(port, &ehci->owned_ports);
+		else if ((t1 & PORT_PE) && !(t1 & PORT_SUSPEND)) {
+			t2 |= PORT_SUSPEND;
+			set_bit(port, &ehci->bus_suspended);
+		}
+
+		/* enable remote wakeup on all ports */
+		if (hcd->self.root_hub->do_remote_wakeup) {
+			if (t1 & PORT_CONNECT)
+				t2 |= PORT_WKOC_E|PORT_WKDISC_E;
+			else
+				t2 |= PORT_WKOC_E|PORT_WKCONN_E;
+		} else
+			t2 &= ~PORT_WAKE_BITS;
+
+		if (t1 != t2) {
+			ehci_writel(ehci, t2, reg);
+		}
+	}
+
+	if (ehci->bus_suspended)
+		udelay(150);
+
+	ehci_halt (ehci);
+	hcd->state = HC_STATE_SUSPENDED;
+
+	if (ehci->reclaim)
+		end_unlink_async(ehci);
+
+	mask = INTR_MASK;
+	if (!hcd->self.root_hub->do_remote_wakeup)
+		mask &= ~STS_PCD;
+	ehci_writel(ehci, mask, &ehci->regs->intr_enable);
+	ehci_readl(ehci, &ehci->regs->intr_enable);
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(10);
+
+	mdelay(100);
+	return 0;
+}
+
+static int ehci_idle_bus_resume (struct usb_hcd *hcd)
+{
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	u32			temp;
+	u32			power_okay;
+	int			i;
+	u8			resume_needed = 0;
+
+	if (time_before (jiffies, ehci->next_statechange))
+		mdelay(15);
+	if (!test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)) {
+		spin_unlock_irq(&ehci->lock);
+		return -ESHUTDOWN;
+	}
+
+	power_okay = ehci_readl(ehci, &ehci->regs->intr_enable);
+	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+	ehci_writel(ehci, 0, &ehci->regs->segment);
+	ehci_writel(ehci, ehci->periodic_dma, &ehci->regs->frame_list);
+	ehci_writel(ehci, (u32) ehci->async->qh_dma, &ehci->regs->async_next);
+
+	ehci_writel(ehci, ehci->command, &ehci->regs->command);
+
+	spin_unlock_irq(&ehci->lock);
+	mdelay(8);
+	spin_lock_irq(&ehci->lock);
+
+	i = HCS_N_PORTS (ehci->hcs_params);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		temp &= ~(PORT_RWC_BITS | PORT_WAKE_BITS);
+		if (test_bit(i, &ehci->bus_suspended) &&
+			(temp & PORT_SUSPEND)) {
+			temp |= PORT_RESUME;
+			resume_needed = 1;
+		}
+		ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
+	}
+
+	if (resume_needed) {
+		mdelay(100);
+	}
+
+	i = HCS_N_PORTS (ehci->hcs_params);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		if (test_bit(i, &ehci->bus_suspended) &&
+			(temp & PORT_SUSPEND)) {
+				temp &= ~(PORT_RWC_BITS | PORT_RESUME);
+				ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
+		}
+	}
+
+	(void) ehci_readl(ehci, &ehci->regs->command);
+	temp = CMD_RUN;
+	if (ehci->async->qh_next.qh)
+		temp |= CMD_ASE;
+	if (ehci->periodic_sched)
+		temp |= CMD_PSE;
+	if (temp) {
+		ehci->command |= temp;
+		ehci_writel(ehci, ehci->command, &ehci->regs->command);
+	}
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(5);
+	hcd->state = HC_STATE_RUNNING;
+
+	ehci_writel(ehci, INTR_MASK, &ehci->regs->intr_enable);
+	ehci_handover_companion_ports(ehci);
+
+	mdelay(100);
+	return 0;
+}
+
+static int ehci_idle_bus_suspend_nonatomic (struct usb_hcd *hcd)
+{
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	int 			port;
+	int			mask;
+
+	if (time_before (jiffies, ehci->next_statechange))
+		msleep(5);
+
+	del_timer_sync(&ehci->watchdog);
+	del_timer_sync(&ehci->iaa_watchdog);
+
+	port = HCS_N_PORTS (ehci->hcs_params);
+	spin_lock_irq (&ehci->lock);
+
+	if (HC_IS_RUNNING(hcd->state)) {
+		ehci_quiesce (ehci);
+		hcd->state = HC_STATE_QUIESCING;
+	}
+
+	ehci->command = ehci_readl(ehci, &ehci->regs->command);
+	ehci_work(ehci);
+
+	ehci->bus_suspended = 0;
+	ehci->owned_ports = 0;
+
+	while (port--) {
+		u32 __iomem	*reg = &ehci->regs->port_status [port];
+		u32		t1 = ehci_readl(ehci, reg) & ~PORT_RWC_BITS;
+		u32		t2 = t1;
+
+		if (t1 & PORT_OWNER)
+			set_bit(port, &ehci->owned_ports);
+		else if ((t1 & PORT_PE) && !(t1 & PORT_SUSPEND)) {
+			t2 |= PORT_SUSPEND;
+			set_bit(port, &ehci->bus_suspended);
+		}
+
+		/* enable remote wakeup on all ports */
+		if (hcd->self.root_hub->do_remote_wakeup) {
+			if (t1 & PORT_CONNECT)
+				t2 |= PORT_WKOC_E|PORT_WKDISC_E;
+			else
+				t2 |= PORT_WKOC_E|PORT_WKCONN_E;
+		} else
+			t2 &= ~PORT_WAKE_BITS;
+
+		if (t1 != t2) {
+			ehci_writel(ehci, t2, reg);
+		}
+	}
+
+	if (ehci->bus_suspended)
+		udelay(150);
+
+	ehci_halt (ehci);
+	hcd->state = HC_STATE_SUSPENDED;
+
+	if (ehci->reclaim)
+		end_unlink_async(ehci);
+
+	mask = INTR_MASK;
+	if (!hcd->self.root_hub->do_remote_wakeup)
+		mask &= ~STS_PCD;
+	ehci_writel(ehci, mask, &ehci->regs->intr_enable);
+	ehci_readl(ehci, &ehci->regs->intr_enable);
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(10);
+	spin_unlock_irq (&ehci->lock);
+	return 0;
+}
+
+static int ehci_idle_bus_resume_nonatomic (struct usb_hcd *hcd)
+{
+	struct ehci_hcd		*ehci = hcd_to_ehci (hcd);
+	u32			temp;
+	u32			power_okay;
+	int			i;
+	u8			resume_needed = 0;
+
+	if (time_before (jiffies, ehci->next_statechange))
+		msleep(5);
+	spin_lock_irq (&ehci->lock);
+	if (!test_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags)) {
+		spin_unlock_irq(&ehci->lock);
+		return -ESHUTDOWN;
+	}
+
+	power_okay = ehci_readl(ehci, &ehci->regs->intr_enable);
+	ehci_writel(ehci, 0, &ehci->regs->intr_enable);
+	ehci_writel(ehci, 0, &ehci->regs->segment);
+	ehci_writel(ehci, ehci->periodic_dma, &ehci->regs->frame_list);
+	ehci_writel(ehci, (u32) ehci->async->qh_dma, &ehci->regs->async_next);
+
+	ehci_writel(ehci, ehci->command, &ehci->regs->command);
+
+	spin_unlock_irq(&ehci->lock);
+	msleep(8);
+	spin_lock_irq(&ehci->lock);
+
+	i = HCS_N_PORTS (ehci->hcs_params);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		temp &= ~(PORT_RWC_BITS | PORT_WAKE_BITS);
+		if (test_bit(i, &ehci->bus_suspended) &&
+			(temp & PORT_SUSPEND)) {
+			temp |= PORT_RESUME;
+			resume_needed = 1;
+		}
+		ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
+	}
+
+	if (resume_needed) {
+		spin_unlock_irq(&ehci->lock);
+		msleep(20);
+		spin_lock_irq(&ehci->lock);
+	}
+
+	i = HCS_N_PORTS (ehci->hcs_params);
+	while (i--) {
+		temp = ehci_readl(ehci, &ehci->regs->port_status [i]);
+		if (test_bit(i, &ehci->bus_suspended) &&
+			(temp & PORT_SUSPEND)) {
+				temp &= ~(PORT_RWC_BITS | PORT_RESUME);
+				ehci_writel(ehci, temp, &ehci->regs->port_status [i]);
+		}
+	}
+
+	(void) ehci_readl(ehci, &ehci->regs->command);
+	temp = CMD_RUN;
+	if (ehci->async->qh_next.qh)
+		temp |= CMD_ASE;
+	if (ehci->periodic_sched)
+		temp |= CMD_PSE;
+	if (temp) {
+		ehci->command |= temp;
+		ehci_writel(ehci, ehci->command, &ehci->regs->command);
+	}
+
+	ehci->next_statechange = jiffies + msecs_to_jiffies(5);
+	hcd->state = HC_STATE_RUNNING;
+
+	ehci_writel(ehci, INTR_MASK, &ehci->regs->intr_enable);
+	spin_unlock_irq (&ehci->lock);
+	ehci_handover_companion_ports(ehci);
+	return 0;
+}
+
+/* Flag that keeps track of USB HC1 in low power idle mode */
+extern int usb_hc1_gated;
+
+static int in_deep_idle = 0;
+static int deep_idle_enable_value = 0;
+
+/* Ehci is ready to suspend */
+int ehci_suspending = 0;
+
+static int ehci_lpm = 1;
+static struct clk *usb_phy2_clk;
+static int phy2_clk_disabled = 0;
+
+static void ehci_low_power_enter(struct ehci_hcd *ehci)
+{
+	if (atomic_read(&suspended) == 1)
+		return;
+
+	if (ehci_suspending)
+		return;
+
+	if (!ehci_lpm)
+		return;
+
+	if (wakeup_value == 1) {
+		ehci_info(ehci,"USB entering idle mode\n");
+		spin_lock_irq(&ehci->lock);
+		atomic_set(&suspended, 1);
+		USBCTRL |= UCTRL_H2WIE;
+		ehci_idle_bus_suspend(ehci_to_hcd(ehci));
+		ehci_low_power = ehci;
+
+		suspend_count++;
+		if (deep_idle_enable_value) {
+			clk_disable(usb_ahb_clk);
+			clk_disable(usb_phy2_clk);
+			in_deep_idle = 1;
+		}
+
+		spin_unlock_irq(&ehci->lock);
+	}
+}
+
+static void ehci_low_power_exit(void)
+{	
+	if (wakeup_value == 0)
+		return;
+
+	if (atomic_read(&suspended) == 0) {
+		return;
+	}
+
+	if (!ehci_lpm)
+		return;
+
+	ehci_info(ehci_low_power,"USB leaving idle mode\n");
+	spin_lock_irq(&ehci_low_power->lock);
+	atomic_set(&suspended, 0);
+	if (in_deep_idle) {
+		clk_enable(usb_phy2_clk);
+		clk_enable(usb_ahb_clk);
+		in_deep_idle = 0;
+	}
+	ehci_idle_bus_resume(ehci_to_hcd(ehci_low_power));
+	USBCTRL &= ~(UCTRL_H2WIE);
+	spin_unlock_irq (&ehci_low_power->lock);
+}
+
+static void ehci_low_power_enter_nonatomic (struct ehci_hcd *ehci)
+{
+	if (atomic_read(&suspended) == 1)
+		return;
+
+	if (ehci_suspending)
+		return;
+
+	if (!ehci_lpm)
+		return;
+
+	if (wakeup_value == 1) {
+		ehci_info(ehci,"USB entering idle mode\n");
+		spin_lock_irq(&ehci->lock);
+		ehci_low_power = ehci;
+		USBCTRL |= UCTRL_H2WIE;
+
+		spin_unlock_irq(&ehci->lock);
+		ehci_idle_bus_suspend_nonatomic(ehci_to_hcd(ehci));
+		spin_lock_irq(&ehci->lock);
+
+		suspend_count++;
+		if (deep_idle_enable_value) {
+			clk_disable(usb_ahb_clk);
+			clk_disable(usb_phy2_clk);
+			in_deep_idle = 1;
+		}
+
+		atomic_set(&suspended, 1);
+		spin_unlock_irq(&ehci->lock);
+	}
+}
+
+static void ehci_low_power_exit_nonatomic (void)
+{
+	if (wakeup_value == 0)
+		return;
+
+	if (atomic_read(&suspended) == 0) {
+		return;
+	}
+
+	if (!ehci_lpm)
+		return;
+
+	ehci_info(ehci_low_power,"USB leaving idle mode\n");
+	spin_lock_irq(&ehci_low_power->lock);
+	if (in_deep_idle) {
+		clk_enable(usb_phy2_clk);
+		clk_enable(usb_ahb_clk);
+		in_deep_idle = 0;
+	}
+
+	spin_unlock_irq(&ehci_low_power->lock);
+	ehci_idle_bus_resume_nonatomic(ehci_to_hcd(ehci_low_power));
+	spin_lock_irq(&ehci_low_power->lock);
+
+	USBCTRL &= ~(UCTRL_H2WIE);
+	atomic_set(&suspended, 0);
+	spin_unlock_irq(&ehci_low_power->lock);
+}	
+	
+/*-------------------------------------------------------------------------*/
+
 #ifdef CONFIG_USB_STATIC_IRAM
 #include "ehci-mem-iram.c"
 #include "ehci-q-iram.c"
@@ -300,10 +756,94 @@ static void ehci_work(struct ehci_hcd *ehci);
 
 /*-------------------------------------------------------------------------*/
 
+/* time in seconds required for USB to sleep if there is no activity */
+#define EHCI_NORMAL_IDLE_THRESHOLD	3
+#define EHCI_HOST_WAKE_IDLE_THRESHOLD	30
+#define EHCI_IRQ_SAMPLING_RATE		1000
+
+atomic_t ehci_idle_counter = ATOMIC_INIT(0);
+atomic_t ehci_idle_threshold = ATOMIC_INIT(EHCI_NORMAL_IDLE_THRESHOLD);
+
+static void ehci_idle_count(struct work_struct *work)
+{
+	struct ehci_hcd *ehci = container_of(work, struct ehci_hcd, dwork.work);
+	unsigned long temp;
+
+	if (atomic_read(&ehci_irq_last_count) !=
+		atomic_read(&ehci_irq_current_count)) {
+			temp = atomic_read(&ehci_irq_current_count);
+			atomic_set(&ehci_irq_last_count, temp);
+			atomic_set(&ehci_idle_counter, 0);
+			if (!ehci_suspending) {
+				schedule_delayed_work(&ehci->dwork,
+					msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
+			}
+	}
+	else {
+		if (atomic_read(&ehci_idle_counter) >=
+			atomic_read(&ehci_idle_threshold)) {
+				atomic_set(&ehci_idle_threshold, EHCI_NORMAL_IDLE_THRESHOLD);
+				atomic_set(&ehci_idle_counter, 0);
+				ehci_low_power_enter_nonatomic(ehci);
+				kick_off_delayed_work = 0;
+		}
+		else {
+			atomic_inc(&ehci_idle_counter);
+			if (!ehci_suspending) {
+				schedule_delayed_work(&ehci->dwork,
+					msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
+			}
+		}
+	}
+}
+
+void ehci_hcd_recalc_work(void)
+{
+	if (atomic_read(&suspended) == 0) {
+		return;
+	}
+
+	atomic_set(&ehci_idle_counter, 0);
+	ehci_low_power_exit();
+}
+EXPORT_SYMBOL(ehci_hcd_recalc_work);
+
+static void ehci_hcd_recalc_work_nonatomic(void)
+{
+	if (atomic_read(&suspended) == 0) {
+		return;
+	}
+
+	atomic_set(&ehci_idle_counter, 0);
+	ehci_low_power_exit_nonatomic();
+}
+
+void ehci_hcd_restart_idle(void)
+{
+	if ((atomic_read(&suspended) == 0) && suspend_count) {
+		atomic_set(&ehci_idle_counter, 0);
+		schedule_delayed_work(&ehci_low_power->dwork,
+			msecs_to_jiffies(EHCI_IDLE_SAMPLING_RATE));
+	}
+}
+EXPORT_SYMBOL(ehci_hcd_restart_idle);
+
+static void ehci_hcd_host_wake(void)
+{
+	if (deep_idle_enable_value) {
+		atomic_set(&ehci_idle_threshold, EHCI_HOST_WAKE_IDLE_THRESHOLD);
+	}
+
+	ehci_hcd_recalc_work_nonatomic();
+}
+
 static void ehci_iaa_watchdog(unsigned long param)
 {
 	struct ehci_hcd		*ehci = (struct ehci_hcd *) param;
 	unsigned long		flags;
+
+	if (atomic_read(&suspended) == 1)
+		return;
 
 	spin_lock_irqsave (&ehci->lock, flags);
 
@@ -352,6 +892,9 @@ static void ehci_watchdog(unsigned long param)
 {
 	struct ehci_hcd		*ehci = (struct ehci_hcd *) param;
 	unsigned long		flags;
+
+	if (atomic_read(&suspended) == 1)
+		return;
 
 	spin_lock_irqsave(&ehci->lock, flags);
 
@@ -402,6 +945,7 @@ static void ehci_shutdown(struct usb_hcd *hcd)
 {
 	struct ehci_hcd	*ehci = hcd_to_ehci(hcd);
 
+	ehci_hcd_recalc_work();
 	del_timer_sync(&ehci->watchdog);
 	del_timer_sync(&ehci->iaa_watchdog);
 
@@ -469,9 +1013,15 @@ static void ehci_stop (struct usb_hcd *hcd)
 
 	ehci_dbg (ehci, "stop\n");
 
+	/* prevent mwan from waking up USB because module */
+	/* is no longer available to respond to callback  */
+	wan_set_usb_wake_callback(NULL);
+
 	/* no more interrupts ... */
 	del_timer_sync (&ehci->watchdog);
 	del_timer_sync(&ehci->iaa_watchdog);
+
+	cancel_rearming_delayed_work(&ehci->dwork);
 
 	spin_lock_irq(&ehci->lock);
 	if (HC_IS_RUNNING (hcd->state))
@@ -521,6 +1071,9 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->iaa_watchdog.function = ehci_iaa_watchdog;
 	ehci->iaa_watchdog.data = (unsigned long) ehci;
 
+	usb_ahb_clk = clk_get(NULL, "usb_ahb_clk");
+	usb_phy2_clk = clk_get(NULL,"usb_phy2_clk");
+
 	/*
 	 * hw default: 1K periodic list heads, one per frame.
 	 * periodic_size can shrink by USBCMD update if hcc_params allows.
@@ -555,6 +1108,8 @@ static int ehci_init(struct usb_hcd *hcd)
 	ehci->async->hw_qtd_next = EHCI_LIST_END(ehci);
 	ehci->async->qh_state = QH_STATE_LINKED;
 	ehci->async->hw_alt_next = QTD_NEXT(ehci, ehci->async->dummy->qtd_dma);
+
+	INIT_DELAYED_WORK(&ehci->dwork, ehci_idle_count);
 
 	/* clear interrupt enables, set irq latency */
 	if (log2_irq_thresh < 0 || log2_irq_thresh > 6)
@@ -690,6 +1245,17 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 	int			bh;
 
 	spin_lock (&ehci->lock);
+	
+	atomic_inc(&ehci_irq_current_count);
+	if (kick_off_delayed_work == 0) {
+		kick_off_delayed_work = 1;
+		spin_unlock (&ehci->lock);
+		ehci_hcd_recalc_work();
+		spin_lock (&ehci->lock);
+
+		schedule_delayed_work(&ehci->dwork,
+			msecs_to_jiffies(EHCI_IRQ_SAMPLING_RATE));
+	}
 
 	status = ehci_readl(ehci, &ehci->regs->status);
 
@@ -702,7 +1268,7 @@ static irqreturn_t ehci_irq (struct usb_hcd *hcd)
 	masked_status = status & INTR_MASK;
 	if (!masked_status) {		/* irq sharing? */
 		spin_unlock(&ehci->lock);
-		return IRQ_NONE;
+		goto out;
 	}
 
 	/* clear (just) interrupts */
@@ -795,6 +1361,7 @@ dead:
 	spin_unlock (&ehci->lock);
 	if (pcd_status)
 		usb_hcd_poll_rh_status(hcd);
+out:
 	return IRQ_HANDLED;
 }
 
@@ -822,6 +1389,7 @@ static int ehci_urb_enqueue (
 
 	INIT_LIST_HEAD (&qtd_list);
 
+	ehci_hcd_recalc_work();
 	switch (usb_pipetype (urb->pipe)) {
 	case PIPE_CONTROL:
 		/* qh_completions() code doesn't handle all the fault cases
@@ -886,6 +1454,7 @@ static int ehci_urb_dequeue(struct usb_hcd *hcd, struct urb *urb, int status)
 	unsigned long		flags;
 	int			rc;
 
+	ehci_hcd_recalc_work();
 	spin_lock_irqsave (&ehci->lock, flags);
 	rc = usb_hcd_check_unlink_urb(hcd, urb, status);
 	if (rc)
@@ -1132,6 +1701,9 @@ MODULE_LICENSE ("GPL");
 #error "missing bus glue for ehci-hcd"
 #endif
 
+extern void pmic_vusb2_enable_vote(int enable,int source);
+#define VUSB2_VOTE_SOURCE_EHCI (1U << 2)
+
 static int __init ehci_hcd_init(void)
 {
 	int retval = 0;
@@ -1158,7 +1730,7 @@ static int __init ehci_hcd_init(void)
 		goto err_debug;
 	}
 #endif
-
+	pmic_vusb2_enable_vote(1,VUSB2_VOTE_SOURCE_EHCI);
 #ifdef PLATFORM_DRIVER
 	retval = platform_driver_register(&PLATFORM_DRIVER);
 	if (retval < 0)
@@ -1206,12 +1778,15 @@ clean0:
 err_debug:
 #endif
 	clear_bit(USB_EHCI_LOADED, &usb_hcds_loaded);
+	pmic_vusb2_enable_vote(0,VUSB2_VOTE_SOURCE_EHCI);
 	return retval;
 }
 module_init(ehci_hcd_init);
 
 static void __exit ehci_hcd_cleanup(void)
 {
+	/* wakeup ehci if it's in lpm */
+	ehci_hcd_recalc_work();
 #ifdef OF_PLATFORM_DRIVER
 	of_unregister_platform_driver(&OF_PLATFORM_DRIVER);
 #endif
@@ -1228,6 +1803,7 @@ static void __exit ehci_hcd_cleanup(void)
 	debugfs_remove(ehci_debug_root);
 #endif
 	clear_bit(USB_EHCI_LOADED, &usb_hcds_loaded);
+	pmic_vusb2_enable_vote(0,VUSB2_VOTE_SOURCE_EHCI);
 }
 module_exit(ehci_hcd_cleanup);
 

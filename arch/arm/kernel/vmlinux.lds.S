@@ -7,6 +7,12 @@
 #include <asm/thread_info.h>
 #include <asm/memory.h>
 #include <asm/page.h>
+
+#if defined(CONFIG_DEBUG_BUGVERBOSE)
+#define ARM_EXIT_KEEP(x)	x
+#else
+#define ARM_EXIT_KEEP(x)
+#endif
 	
 OUTPUT_ARCH(arm)
 ENTRY(stext)
@@ -32,6 +38,7 @@ SECTIONS
 
 	.init : {			/* Init code and data		*/
 			INIT_TEXT
+			ARM_EXIT_KEEP(EXIT_TEXT)
 		_einittext = .;
 		__proc_info_begin = .;
 			*(.proc.info.init)
@@ -74,6 +81,7 @@ SECTIONS
 #ifndef CONFIG_XIP_KERNEL
 		__init_begin = _stext;
 		INIT_DATA
+		ARM_EXIT_KEEP(EXIT_DATA)
 		. = ALIGN(PAGE_SIZE);
 		__init_end = .;
 #endif

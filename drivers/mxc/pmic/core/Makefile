@@ -7,8 +7,16 @@ pmic_mc13783_mod-objs := pmic_external.o pmic_event.o pmic_common.o pmic_core_sp
 obj-$(CONFIG_MXC_PMIC_MC13892) += pmic_mc13892_mod.o
 pmic_mc13892_mod-objs := pmic_external.o pmic_event.o pmic_common.o mc13892.o
 
+obj-$(CONFIG_MXC_PMIC_MC34708) += pmic_mc34708_mod.o
+pmic_mc34708_mod-objs := pmic_external.o pmic_event.o pmic_common.o mc34708.o
+
 ifneq ($(CONFIG_MXC_PMIC_SPI),)
+ifeq ($(CONFIG_MXC_PMIC_MC34708),y)
+pmic_mc34708_mod-objs += pmic_core_spi.o
+endif
+ifeq ($(CONFIG_MXC_PMIC_MC13892),y)
 pmic_mc13892_mod-objs += pmic_core_spi.o
+endif
 endif
 
 ifneq ($(CONFIG_MXC_PMIC_I2C),)

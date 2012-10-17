@@ -75,8 +75,9 @@ typedef unsigned char bool;
 #define PXP_PIX_FMT_YUV422P fourcc('4', '2', '2', 'P')	/*!< 16 YUV 4:2:2 */
 /*! @} */
 
-#define PXP_LUT_NONE		0x0
-#define PXP_LUT_INVERT		0x1
+#define PXP_LUT_NONE			0x0
+#define PXP_LUT_INVERT			0x1
+#define PXP_LUT_BLACK_WHITE		0x2
 
 #define NR_PXP_VIRT_CHANNEL	16
 
@@ -173,6 +174,7 @@ struct pxp_mem_desc {
 
 struct pxp_tx_desc {
 	struct dma_async_tx_descriptor txd;
+	struct list_head tx_list;
 	struct list_head list;
 	int len;
 	union {
@@ -219,3 +221,4 @@ void pxp_txd_ack(struct dma_async_tx_descriptor *txd,
 #endif
 
 #endif
+

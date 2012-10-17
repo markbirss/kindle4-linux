@@ -1402,6 +1402,9 @@ __releases(&info->lock)
 {
 	struct fb_info * const info = file->private_data;
 
+	if (!info)
+		return 0;
+
 	mutex_lock(&info->lock);
 	if (info->fbops->fb_release)
 		info->fbops->fb_release(info,1);

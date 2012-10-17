@@ -48,6 +48,7 @@ extern int lp_high_freq;
 extern int lp_med_freq;
 extern int low_bus_freq_mode;
 extern int high_bus_freq_mode;
+int med_bus_freq_mode = 0;
 extern int set_high_bus_freq(int high_freq);
 extern int set_low_bus_freq(void);
 extern int low_freq_bus_used(void);
@@ -57,7 +58,7 @@ int dvfs_core_is_active;
 
 static LIST_HEAD(clocks);
 static DEFINE_MUTEX(clocks_mutex);
-static DEFINE_SPINLOCK(clockfw_lock);
+static DEFINE_ATOMIC_SPINLOCK(clockfw_lock);
 
 /*-------------------------------------------------------------------------
  * Standard clock functions defined in include/linux/clk.h
@@ -139,11 +140,11 @@ static void __clk_disable(struct clk *clk)
 		return;
 
 	if (!(--clk->usecount)) {
-		__clk_disable(clk->parent);
-		__clk_disable(clk->secondary);
-
 		if (clk->disable)
 			clk->disable(clk);
+
+		__clk_disable(clk->parent);
+		__clk_disable(clk->secondary);
 	}
 }
 
@@ -173,32 +174,27 @@ int clk_enable(struct clk *clk)
 	if (clk == NULL || IS_ERR(clk))
 		return -EINVAL;
 
-	spin_lock_irqsave(&clockfw_lock, flags);
-
-	ret = __clk_enable(clk);
-
-	spin_unlock_irqrestore(&clockfw_lock, flags);
-
 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
-			&& (clk_get_usecount(clk) == 1)) {
+		&& (clk_get_usecount(clk) == 0)) {
 #if (defined(CONFIG_ARCH_MX5) || defined(CONFIG_ARCH_MX37))
-		if (low_freq_bus_used() && !low_bus_freq_mode)
-			set_low_bus_freq();
+		if (!(clk->flags &
+			(AHB_HIGH_SET_POINT | AHB_MED_SET_POINT)))  {
+			if (low_freq_bus_used() && !low_bus_freq_mode) 
+				set_low_bus_freq();
+		}
 		else {
-			if (!high_bus_freq_mode) {
-				/* Currently at ow or medium set point,
-				  * need to set to high setpoint
-				  */
+			if ((clk->flags & AHB_MED_SET_POINT)
+				&& !med_bus_freq_mode)
 				set_high_bus_freq(0);
-			} else if (high_bus_freq_mode || low_bus_freq_mode) {
-				/* Currently at ow or high set point,
-				  * need to set to medium setpoint
-				  */
-				set_high_bus_freq(0);
-			}
+			else if ((clk->flags & AHB_HIGH_SET_POINT)
+				&& !high_bus_freq_mode)
+				set_high_bus_freq(1);
 		}
 #endif
 	}
+	atomic_spin_lock_irqsave(&clockfw_lock, flags);
+	ret = __clk_enable(clk);
+	atomic_spin_unlock_irqrestore(&clockfw_lock, flags);
 
 	return ret;
 }
@@ -215,30 +211,23 @@ void clk_disable(struct clk *clk)
 	if (clk == NULL || IS_ERR(clk))
 		return;
 
-	spin_lock_irqsave(&clockfw_lock, flags);
+	atomic_spin_lock_irqsave(&clockfw_lock, flags);
 
 	__clk_disable(clk);
 
-	spin_unlock_irqrestore(&clockfw_lock, flags);
+	atomic_spin_unlock_irqrestore(&clockfw_lock, flags);
 
 	if ((clk->flags & CPU_FREQ_TRIG_UPDATE)
 			&& (clk_get_usecount(clk) == 0)) {
 #if (defined(CONFIG_ARCH_MX5) || defined(CONFIG_ARCH_MX37))
 		if (low_freq_bus_used() && !low_bus_freq_mode)
 			set_low_bus_freq();
-		else {
-			if (!high_bus_freq_mode) {
-				/* Currently at ow or medium set point,
-				  * need to set to high setpoint
-				  */
-				set_high_bus_freq(0);
-			} else if (high_bus_freq_mode || low_bus_freq_mode) {
-				/* Currently at ow or high set point,
-				  * need to set to medium setpoint
-				  */
-				set_high_bus_freq(0);
-			}
-		}
+		else if ((clk->flags & AHB_MED_SET_POINT)
+			&& !med_bus_freq_mode)
+			set_high_bus_freq(0);
+		else if ((clk->flags & AHB_HIGH_SET_POINT)
+			&& !high_bus_freq_mode)
+			set_high_bus_freq(1);
 #endif
 	}
 }
@@ -336,13 +325,13 @@ int clk_set_rate(struct clk *clk, unsigned long rate)
 	if (clk == NULL || IS_ERR(clk) || clk->set_rate == NULL || rate == 0)
 		return ret;
 
-	spin_lock_irqsave(&clockfw_lock, flags);
+	atomic_spin_lock_irqsave(&clockfw_lock, flags);
 
 	ret = clk->set_rate(clk, rate);
 	if (unlikely((ret == 0) && (clk->flags & RATE_PROPAGATES)))
 		propagate_rate(clk);
 
-	spin_unlock_irqrestore(&clockfw_lock, flags);
+	atomic_spin_unlock_irqrestore(&clockfw_lock, flags);
 
 	return ret;
 }
@@ -363,7 +352,7 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 		clk_enable(parent);
 	}
 
-	spin_lock_irqsave(&clockfw_lock, flags);
+	atomic_spin_lock_irqsave(&clockfw_lock, flags);
 	ret = clk->set_parent(clk, parent);
 	if (ret == 0) {
 		clk->parent = parent;
@@ -375,7 +364,7 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 		if (unlikely(clk->flags & RATE_PROPAGATES))
 			propagate_rate(clk);
 	}
-	spin_unlock_irqrestore(&clockfw_lock, flags);
+	atomic_spin_unlock_irqrestore(&clockfw_lock, flags);
 
 	if (clk->usecount != 0) {
 		clk_disable(prev_parent);

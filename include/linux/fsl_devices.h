@@ -93,6 +93,9 @@ struct fsl_usb2_platform_data {
 	void (*platform_suspend)(struct fsl_usb2_platform_data *);
 	void (*platform_resume)(struct fsl_usb2_platform_data *);
 	void (*wake_up_enable)(struct fsl_usb2_platform_data *pdata, bool on);
+#ifdef CONFIG_MACH_MX50_YOSHIME
+	void (*phy_lowpower_suspend)(struct fsl_usb2_platform_data *pdata, bool on);
+#endif
 	void (*platform_driver_vbus)(bool on); /* platform special function for vbus shutdown/open */
 	unsigned			big_endian_mmio : 1;
 	unsigned			big_endian_desc : 1;
@@ -103,6 +106,12 @@ struct fsl_usb2_platform_data {
 	unsigned ahb_burst_mode:3;
 	unsigned			suspended : 1;
 	unsigned			already_suspended : 1;
+#ifdef CONFIG_MACH_MX50_YOSHIME
+	unsigned            lowpower:1;
+	unsigned            irq_delay:1;
+	unsigned            wakeup_event:1;
+	struct fsl_usb2_wakeup_platform_data *wakeup_pdata;
+#endif
 
 	u32				id_gpio;
 	/* register save area for suspend/resume */
@@ -120,6 +129,25 @@ struct fsl_usb2_platform_data {
 /* Flags in fsl_usb2_mph_platform_data */
 #define FSL_USB2_PORT0_ENABLED	0x00000001
 #define FSL_USB2_PORT1_ENABLED	0x00000002
+
+#ifdef CONFIG_MACH_MX50_YOSHIME
+
+struct fsl_usb2_wakeup_platform_data {
+	char *name;
+	void (*usb_clock_for_pm) (bool);
+	void (*usb_wakeup_exhandle) (void);
+	struct fsl_usb2_platform_data *usb_pdata[3];
+	/* This waitqueue is used to wait "usb_wakeup thread" to finish
+	 * during system resume routine. "usb_wakeup theard" should be finished
+	 * prior to usb resume routine.
+	 */
+	wait_queue_head_t wq;
+	/* This flag is used to indicate the "usb_wakeup thread" is finished during
+	 * usb wakeup routine.
+	 */
+	bool usb_wakeup_is_pending;
+};
+#endif
 
 struct spi_device;
 

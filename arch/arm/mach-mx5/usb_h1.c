@@ -73,26 +73,14 @@ static void _wake_up_enable(struct fsl_usb2_platform_data *pdata, bool enable)
 		USBCTRL &= ~UCTRL_H1WIE;
 }
 
+static struct clk *usb_ahb_clk;
 static void usbotg_clock_gate(bool on)
 {
 	struct clk *usb_clk;
 	if (on) {
-		usb_clk = clk_get(NULL, "usb_ahb_clk");
-		clk_enable(usb_clk);
-		clk_put(usb_clk);
-
-		usb_clk = clk_get(NULL, "usboh3_clk");
-		clk_enable(usb_clk);
-		clk_put(usb_clk);
-
+		clk_enable(usb_ahb_clk);
 	} else {
-		usb_clk = clk_get(NULL, "usboh3_clk");
-		clk_disable(usb_clk);
-		clk_put(usb_clk);
-
-		usb_clk = clk_get(NULL, "usb_ahb_clk");
-		clk_disable(usb_clk);
-		clk_put(usb_clk);
+		clk_disable(usb_ahb_clk);
 	}
 }
 
@@ -186,5 +174,6 @@ void __init mx5_usbh1_init(void)
 		usbh1_config.gpio_usb_inactive = gpio_usbh1_inactive;
 	}
 	mxc_register_device(&mxc_usbh1_device, &usbh1_config);
+	usb_ahb_clk = clk_get(NULL, "usb_ahb_clk");
 }
 

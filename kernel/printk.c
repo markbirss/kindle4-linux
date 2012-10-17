@@ -649,6 +649,17 @@ static int recursion_bug;
 static int new_text_line = 1;
 static char printk_buf[1024];
 
+
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+
+extern char *mx50_wdog_printk_base;
+extern u32 mx50_wdog_printk_buf;
+extern u32 mx50_wdog_printk_start;
+
+u32 wdog_line_cnt = 0;
+
+#endif
+
 asmlinkage int vprintk(const char *fmt, va_list args)
 {
 	int printed_len = 0;
@@ -657,6 +668,10 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	int this_cpu;
 	char *p;
 
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+	u32 *saved_ptrs = NULL;
+	char *saved_buf = NULL;
+#endif
 	boot_delay_msec();
 
 	preempt_disable();
@@ -700,6 +715,14 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 
 	p = printk_buf;
 
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+	if (mx50_wdog_printk_base && WDOG_PTR_VALID(mx50_wdog_printk_buf)) 
+	{
+	    saved_ptrs = (u32 *) (mx50_wdog_printk_base + MXC_WDOG_PRINTK_BUF_SIZE - MAX_WDOG_PRINTK_LINE);
+	    saved_buf = (char *) (mx50_wdog_printk_base + (mx50_wdog_printk_buf * MAX_WDOG_PRINTK_LINE));
+	}
+#endif
+	
 	/* Do we have a loglevel in the string? */
 	if (p[0] == '<') {
 		unsigned char c = p[1];
@@ -751,16 +774,65 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 					emit_log_char(*tp);
 				printed_len += tlen;
 			}
-
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+			wdog_line_cnt = 0;
+#endif
 			if (!*p)
 				break;
 		}
 
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+		if (saved_buf) {
+		    if (wdog_line_cnt < (MAX_WDOG_PRINTK_LINE - 2)) {
+			saved_buf[wdog_line_cnt++] = *p;
+			saved_buf[wdog_line_cnt] = 0;
+
+			/* if overflow, make sure there's a carriage return + NULL terminate */
+			if (wdog_line_cnt == (MAX_WDOG_PRINTK_LINE - 2)) {
+			    saved_buf[wdog_line_cnt++] = '\n';
+			    saved_buf[wdog_line_cnt] = 0;
+			}
+			
+		    }
+		}
+#endif
 		emit_log_char(*p);
-		if (*p == '\n')
+		if (*p == '\n') {
 			new_text_line = 1;
+
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+			if (saved_buf) {
+			    
+			    if (wdog_line_cnt < (MAX_WDOG_PRINTK_LINE - 2)) {
+				saved_buf[wdog_line_cnt] = 0;
+			    }
+
+			    /* If wrapping around, update start buffer to be the slot after the one we just copied */
+			    if (mx50_wdog_printk_start == MXC_WDOG_PRINTK_BUF_INVALID_INDEX) {
+
+				mx50_wdog_printk_start = mx50_wdog_printk_buf;
+
+			    } else if (mx50_wdog_printk_buf == mx50_wdog_printk_start) {
+
+				mx50_wdog_printk_start = (mx50_wdog_printk_start + 1) % MXC_WDOG_PRINTK_BUF_MAX_INDEX;
+			    }
+
+			    /* Update current buffer to point to the stalest slot  */
+			    mx50_wdog_printk_buf = (mx50_wdog_printk_buf + 1) % MXC_WDOG_PRINTK_BUF_MAX_INDEX;
+			    wdog_line_cnt = 0;
+			}
+#endif
+		}
 	}
 
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+	if (saved_ptrs) {
+	    /* Update saved ptrs so we can figure out where we were after reboot */
+	    saved_ptrs[MXC_WDOG_PRINTK_BUF_MAGIC] = MXC_WDOG_PRINTK_BUF_MAGIC_VALUE;
+	    saved_ptrs[MXC_WDOG_PRINTK_BUF_START_INDEX] = mx50_wdog_printk_start;
+	    saved_ptrs[MXC_WDOG_PRINTK_BUF_END_INDEX] = mx50_wdog_printk_buf;
+	}
+#endif
 	/*
 	 * Try to acquire and then immediately release the
 	 * console semaphore. The release will do all the

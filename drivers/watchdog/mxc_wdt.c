@@ -3,9 +3,14 @@
  *
  * Watchdog driver for FSL MXC. It is based on omap1610_wdt.c
  *
- * Copyright (C) 2004-2010 Freescale Semiconductor, Inc.
- * 2005 (c) MontaVista Software, Inc.
-
+ * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ * 2005 (c) MontaVista Software, Inc.  All Rights Reserved.
+ *
+ * Add support for in-kernel watchdog
+ *
+ * Copyright 2009-2011 Amazon Technologies, Inc. All Rights Reserved.
+ * Manish Lachwani (lachwani@lab126.com)
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -44,25 +49,33 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <linux/miscdevice.h>
 #include <linux/watchdog.h>
 #include <linux/reboot.h>
+#include <linux/smp_lock.h>
 #include <linux/init.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
+#include <linux/moduleparam.h>
 #include <linux/clk.h>
-#include <linux/io.h>
-#include <linux/uaccess.h>
+#include <linux/timer.h>
+
+#include <asm/io.h>
+#include <asm/uaccess.h>
+#include <mach/hardware.h>
+#include <asm/irq.h>
+#include <asm/bitops.h>
 
 #include "mxc_wdt.h"
-
 #define DVR_VER "2.0"
 
-#define WDOG_SEC_TO_COUNT(s)  ((s * 2) << 8)
-#define WDOG_COUNT_TO_SEC(c)  ((c >> 8) / 2)
+#define WDOG_SEC_TO_COUNT(s)  (((s * 2) + 1) << 8)
+#define WDOG_COUNT_TO_SEC(c)  (((c >> 8) - 1) / 2)
 
-static void __iomem  *wdt_base_reg;
+#define WATCHDOG_PING_THRESHOLD 	10000	/* 10 second refresh rate */
+static void __iomem *wdt_base_reg;
 static int mxc_wdt_users;
 static struct clk *mxc_wdt_clk;
 
@@ -72,6 +85,29 @@ MODULE_PARM_DESC(timer_margin, "initial watchdog timeout (in seconds)");
 
 static unsigned dev_num = 0;
 
+static void do_watchdog_timer(unsigned long unused);
+static struct timer_list wdt_timer;
+
+static int mxc_watchdog_stopped = 0;
+
+/*
+ * TESTING ONLY
+ *
+ * Provide a way to increase the timeout when running stress tests
+ */
+
+static ssize_t
+show_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, char *buf);
+
+static ssize_t
+store_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
+
+static DEVICE_ATTR(mxc_wdt_timeout, 0666, show_mxc_wdt_timeout, store_mxc_wdt_timeout);
+
+static ssize_t
+store_mxc_wdt_keepalive(struct device *dev, struct device_attribute *attr, const char *buf, size_t count);
+static DEVICE_ATTR(mxc_wdt_keepalive, 0666, NULL, store_mxc_wdt_keepalive);
+
 static void mxc_wdt_ping(void *base)
 {
 	/* issue the service sequence instructions */
@@ -79,17 +115,28 @@ static void mxc_wdt_ping(void *base)
 	__raw_writew(WDT_MAGIC_2, base + MXC_WDT_WSR);
 }
 
+static void do_watchdog_timer(unsigned long unused)
+{
+	mxc_wdt_ping(wdt_base_reg);
+	if (!mxc_watchdog_stopped)
+		mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
+}
+
+static ssize_t
+store_mxc_wdt_keepalive(struct device *dev, struct device_attribute *attr,
+			const char *buf, size_t count)
+{
+	mxc_wdt_ping(wdt_base_reg);
+	return count;
+}
+
 static void mxc_wdt_config(void *base)
 {
 	u16 val;
 
-	val = __raw_readw(base + MXC_WDT_WCR);
-	val |= 0xFF00 | WCR_WOE_BIT | WCR_WDA_BIT | WCR_SRS_BIT;
-	/* enable suspend WDT */
-	val |= WCR_WDZST_BIT | WCR_WDBG_BIT;
-	/* generate reset if wdog times out */
-	val &= ~WCR_WRE_BIT;
-
+	val = WDOG_SEC_TO_COUNT(timer_margin) |
+	      WCR_WOE_BIT | WCR_WDA_BIT | WCR_SRS_BIT |
+	      WCR_WDZST_BIT | WCR_WDBG_BIT | WCR_WRE_BIT;
 	__raw_writew(val, base + MXC_WDT_WCR);
 }
 
@@ -230,6 +277,32 @@ mxc_wdt_ioctl(struct inode *inode, struct file *file,
 	}
 }
 
+static ssize_t
+show_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%d\n", timer_margin);
+}
+
+static ssize_t
+store_mxc_wdt_timeout(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+{
+	int new_margin;
+
+	if (sscanf(buf, "%d", &new_margin) != 1)
+		return -EINVAL;
+
+	if (new_margin > 127)
+		new_margin = 127;
+
+	mxc_wdt_adjust_timeout(new_margin);
+	mxc_wdt_disable(wdt_base_reg);
+	mxc_wdt_set_timeout(wdt_base_reg);
+	mxc_wdt_enable(wdt_base_reg);
+	mxc_wdt_ping(wdt_base_reg);
+	
+	return count;
+}
+
 static struct file_operations mxc_wdt_fops = {
 	.owner = THIS_MODULE,
 	.write = mxc_wdt_write,
@@ -243,6 +316,32 @@ static struct miscdevice mxc_wdt_miscdev = {
 	.name = "watchdog",
 	.fops = &mxc_wdt_fops
 };
+
+void mxc_wdt_reset(void)
+{
+        u16 reg;
+
+	clk_enable(mxc_wdt_clk);
+
+        reg = __raw_readw(wdt_base_reg + MXC_WDT_WCR) & ~WCR_SRS_BIT;
+        reg |= WCR_WDE_BIT;
+        __raw_writew(reg, wdt_base_reg + MXC_WDT_WCR);
+}
+
+static ssize_t wdog_rst_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	int value = 0;
+
+	if (sscanf(buf, "%d", &value) <= 0) {
+		printk(KERN_ERR "Error invoking watchdog reset\n");
+		return -EINVAL;
+	}
+
+	mxc_wdt_reset();
+	return size;
+}
+static DEVICE_ATTR(wdog_rst, 0644, NULL, wdog_rst_store);
 
 static int __init mxc_wdt_probe(struct platform_device *pdev)
 {
@@ -279,10 +378,28 @@ static int __init mxc_wdt_probe(struct platform_device *pdev)
 	pr_info("MXC Watchdog # %d Timer: initial timeout %d sec\n", dev_num,
 		timer_margin);
 
+	mxc_wdt_config(wdt_base_reg);
+	mxc_wdt_set_timeout(wdt_base_reg);
+	mxc_wdt_enable(wdt_base_reg);
+	mxc_wdt_ping(wdt_base_reg);
+
+	init_timer(&wdt_timer);	
+	wdt_timer.function = do_watchdog_timer;
+	mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
+	pr_info("MXC Watchdog: Started %d millisecond watchdog refresh\n", WATCHDOG_PING_THRESHOLD);
+
+	if (device_create_file(&pdev->dev, &dev_attr_mxc_wdt_timeout) < 0)
+		printk(KERN_ERR "watchdog: error creating mxc_wdt_timeout file\n");
+
+	if (device_create_file(&pdev->dev, &dev_attr_mxc_wdt_keepalive) < 0)
+		printk(KERN_ERR "watchdog: error creating mxc_wdt_keepalive file\n");
+
+	if (device_create_file(&pdev->dev, &dev_attr_wdog_rst) < 0)
+		printk (KERN_ERR "Error - could not create wdog_rst file\n");
+
 	return 0;
 
       fail:
-	iounmap(wdt_base_reg);
 	release_resource(mem);
 	pr_info("MXC Watchdog Probe failed\n");
 	return ret;
@@ -292,47 +409,50 @@ static void mxc_wdt_shutdown(struct platform_device *pdev)
 {
 	mxc_wdt_disable(wdt_base_reg);
 	pr_info("MXC Watchdog # %d shutdown\n", dev_num);
+	del_timer_sync(&wdt_timer);
 }
 
 static int __exit mxc_wdt_remove(struct platform_device *pdev)
 {
 	struct resource *mem = platform_get_drvdata(pdev);
 	misc_deregister(&mxc_wdt_miscdev);
-	iounmap(wdt_base_reg);
 	release_resource(mem);
 	pr_info("MXC Watchdog # %d removed\n", dev_num);
+	device_remove_file(&pdev->dev, &dev_attr_mxc_wdt_timeout);
+	device_remove_file(&pdev->dev, &dev_attr_mxc_wdt_keepalive);
+	device_remove_file(&pdev->dev, &dev_attr_wdog_rst);
+	del_timer_sync(&wdt_timer);
 	return 0;
 }
 
-#ifdef	CONFIG_PM
+#ifdef CONFIG_PM
 
-/* REVISIT ... not clear this is the best way to handle system suspend; and
- * it's very inappropriate for selective device suspend (e.g. suspending this
- * through sysfs rather than by stopping the watchdog daemon).  Also, this
- * may not play well enough with NOWAYOUT...
+/*
+ * Cannot stop a running watchdog. The watchdog automatically stops counting
+ * in state retention mode. We just cancel the timer that pings
+ * the watchdog.
  */
-
 static int mxc_wdt_suspend(struct platform_device *pdev, pm_message_t state)
 {
-	if (mxc_wdt_users) {
-		mxc_wdt_disable(wdt_base_reg);
-	}
+	mxc_watchdog_stopped = 1;
+	del_timer_sync(&wdt_timer);
 	return 0;
 }
 
 static int mxc_wdt_resume(struct platform_device *pdev)
 {
-	if (mxc_wdt_users) {
-		mxc_wdt_enable(wdt_base_reg);
-		mxc_wdt_ping(wdt_base_reg);
-	}
+	mxc_watchdog_stopped = 0;
+	mxc_wdt_ping(wdt_base_reg);
+	mod_timer(&wdt_timer, jiffies + msecs_to_jiffies(WATCHDOG_PING_THRESHOLD));
 	return 0;
 }
 
-#else
+#else /* CONFIG_PM */
+
 #define	mxc_wdt_suspend	NULL
-#define	mxc_wdt_resume		NULL
-#endif
+#define	mxc_wdt_resume	NULL
+
+#endif /* CONFIG_PM */
 
 static struct platform_driver mxc_wdt_driver = {
 	.driver = {

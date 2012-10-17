@@ -141,8 +141,14 @@ config MXC_USB_DB4
 	bool "Differential Bidirectional Mode"
 	help
 	  If you say yes to this option, the serial tranceiver operates in DB4 mode.
-
 endchoice
+
+config MXC_ZQ_CALIBRATION
+	bool "ZQ Calib for LPDDR2"
+	depends on MACH_MX50_YOSHIME
+	default y
+	help
+	  Select this if you're sure it's needed.
 
 config MXC_IRQ_PRIOR
 	bool "Use IRQ priority"

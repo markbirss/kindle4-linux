@@ -27,6 +27,7 @@
 #include <mach/hardware.h>
 #include <mach/gpio.h>
 #include <mach/sdma.h>
+#include "dma-apbh.h"
 
 /* Flag used to indicate when IRAM has been initialized */
 int iram_ready;
@@ -113,67 +114,6 @@ struct platform_device mxc_rtc_device = {
 	.resource = rtc_resources,
 };
 
-static struct resource mxc_nand_resources[] = {
-	{
-		.flags = IORESOURCE_MEM,
-		.name  = "NFC_AXI_BASE",
-		.start = MX51_NFC_BASE_ADDR_AXI,
-		.end   = MX51_NFC_BASE_ADDR_AXI + SZ_8K - 1,
-	},
-	{
-		.flags = IORESOURCE_MEM,
-		.name  = "NFC_IP_BASE",
-		.start = NFC_BASE_ADDR + 0x00,
-		.end   = NFC_BASE_ADDR + 0x34 - 1,
-	},
-	{
-		.flags = IORESOURCE_IRQ,
-		.start = MXC_INT_NFC,
-		.end   = MXC_INT_NFC,
-	},
-};
-
-struct platform_device mxc_nandv2_mtd_device = {
-	.name = "mxc_nandv2_flash",
-	.id = 0,
-	.resource = mxc_nand_resources,
-	.num_resources = ARRAY_SIZE(mxc_nand_resources),
-};
-
-static struct resource imx_nfc_resources[] = {
-	{
-		.flags = IORESOURCE_MEM,
-		.start = MX51_NFC_BASE_ADDR_AXI,
-		.end   = MX51_NFC_BASE_ADDR_AXI + 0x1200 - 1,
-		.name  = IMX_NFC_BUFFERS_ADDR_RES_NAME,
-	},
-	{
-		.flags = IORESOURCE_MEM,
-		.start = MX51_NFC_BASE_ADDR_AXI + 0x1E00,
-		.end   = MX51_NFC_BASE_ADDR_AXI + 0x1E44 - 1,
-		.name  = IMX_NFC_PRIMARY_REGS_ADDR_RES_NAME,
-	},
-	{
-		.flags = IORESOURCE_MEM,
-		.start = NFC_BASE_ADDR + 0x00,
-		.end   = NFC_BASE_ADDR + 0x34 - 1,
-		.name  = IMX_NFC_SECONDARY_REGS_ADDR_RES_NAME,
-	},
-	{
-		.flags = IORESOURCE_IRQ,
-		.start = MXC_INT_NFC,
-		.end   = MXC_INT_NFC,
-		.name  = IMX_NFC_INTERRUPT_RES_NAME,
-	},
-};
-
-struct platform_device imx_nfc_device = {
-	.name = IMX_NFC_DRIVER_NAME,
-	.id = 0,
-	.resource      = imx_nfc_resources,
-	.num_resources = ARRAY_SIZE(imx_nfc_resources),
-};
-
 static struct resource wdt_resources[] = {
 	{
 		.start = WDOG1_BASE_ADDR,
@@ -227,51 +167,6 @@ struct platform_device mxc_pwm2_device = {
 	.id = 1,
 	.num_resources = ARRAY_SIZE(pwm2_resources),
 	.resource = pwm2_resources,
-};
-
-struct platform_device mxc_pwm_backlight_device = {
-	.name = "pwm-backlight",
-	.id = -1,
-};
-
-static struct resource flexcan0_resources[] = {
-	{
-	    .start = CAN1_BASE_ADDR,
-	    .end = CAN1_BASE_ADDR + 0x3FFF,
-	    .flags = IORESOURCE_MEM,
-	},
-	{
-	    .start = MXC_INT_CAN1,
-	    .end = MXC_INT_CAN1,
-	    .flags = IORESOURCE_IRQ,
-	},
-};
-
-struct platform_device mxc_flexcan0_device = {
-	.name = "FlexCAN",
-	.id = 0,
-	.num_resources = ARRAY_SIZE(flexcan0_resources),
-	.resource = flexcan0_resources,
-};
-
-static struct resource flexcan1_resources[] = {
-	{
-	    .start = CAN2_BASE_ADDR,
-	    .end = CAN2_BASE_ADDR + 0x3FFF,
-	    .flags = IORESOURCE_MEM,
-	},
-	{
-	    .start = MXC_INT_CAN2,
-	    .end = MXC_INT_CAN2,
-	    .flags = IORESOURCE_IRQ,
-	},
-};
-
-struct platform_device mxc_flexcan1_device = {
-	.name = "FlexCAN",
-	.id = 1,
-	.num_resources = ARRAY_SIZE(flexcan1_resources),
-	.resource = flexcan1_resources,
 };
 
 static struct resource ipu_resources[] = {
@@ -583,6 +478,11 @@ struct platform_device mxci2c_hs_device = {
 	.resource = mxci2c_hs_resources
 };
 
+struct platform_device mxc_yoshime_ripley_device = {
+	.name = "mc34708_battery",
+	.id = 0,
+};
+
 static struct resource ssi1_resources[] = {
 	{
 		.start = SSI1_BASE_ADDR,
@@ -763,26 +663,6 @@ int __init mxc_register_gpios(void)
 	return mxc_gpio_init(mxc_gpio_ports, ARRAY_SIZE(mxc_gpio_ports));
 }
 
-static struct resource spdif_resources[] = {
-	{
-		.start = SPDIF_BASE_ADDR,
-		.end = SPDIF_BASE_ADDR + 0x50,
-		.flags = IORESOURCE_MEM,
-	},
-	{
-		.start = MXC_INT_SPDIF_MX51,
-		.end = MXC_INT_SPDIF_MX51,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-struct platform_device mxc_alsa_spdif_device = {
-	.name = "mxc_alsa_spdif",
-	.id = 0,
-	.num_resources = ARRAY_SIZE(spdif_resources),
-	.resource = spdif_resources,
-};
-
 struct platform_device mx51_lpmode_device = {
 	.name = "mx51_lpmode",
 	.id = 0,
@@ -821,31 +701,6 @@ struct platform_device mxc_iim_device = {
 	.id = 0,
 	.num_resources = ARRAY_SIZE(mxc_iim_resources),
 	.resource = mxc_iim_resources
-};
-
-static struct resource mxc_sim_resources[] = {
-	{
-		.start = SIM_BASE_ADDR,
-		.end = SIM_BASE_ADDR + SZ_4K - 1,
-		.flags = IORESOURCE_MEM,
-	},
-	{
-		.start = MXC_INT_SIM_IPB,
-		.end = MXC_INT_SIM_IPB,
-		.flags = IORESOURCE_IRQ,
-	},
-	{
-		.start = MXC_INT_SIM_DAT,
-		.end = MXC_INT_SIM_DAT,
-		.flags = IORESOURCE_IRQ,
-	},
-};
-
-struct platform_device mxc_sim_device = {
-	.name = "mxc_sim",
-	.id = 0,
-	.num_resources = ARRAY_SIZE(mxc_sim_resources),
-	.resource = mxc_sim_resources,
 };
 
 static struct resource mxcsdhc1_resources[] = {
@@ -896,6 +751,22 @@ static struct resource mxcsdhc3_resources[] = {
 	},
 };
 
+static struct resource mxcsdhc4_resources[] = {
+        {
+                .start = MMC_SDHC4_BASE_ADDR,
+                .end = MMC_SDHC4_BASE_ADDR + SZ_4K - 1,
+                .flags = IORESOURCE_MEM,
+        },
+        {
+                .start = MXC_INT_MMC_SDHC4,
+                .end = MXC_INT_MMC_SDHC4,
+                .flags = IORESOURCE_IRQ,
+        },
+        {
+                .flags = IORESOURCE_IRQ,
+        },
+};
+
 struct platform_device mxcsdhc1_device = {
 	.name = "mxsdhci",
 	.id = 0,
@@ -906,6 +777,9 @@ struct platform_device mxcsdhc1_device = {
 struct platform_device mxcsdhc2_device = {
 	.name = "mxsdhci",
 	.id = 1,
+	.dev = {
+		.coherent_dma_mask = DMA_BIT_MASK(32),
+	 },
 	.num_resources = ARRAY_SIZE(mxcsdhc2_resources),
 	.resource = mxcsdhc2_resources,
 };
@@ -915,6 +789,13 @@ struct platform_device mxcsdhc3_device = {
 	.id = 2,
 	.num_resources = ARRAY_SIZE(mxcsdhc3_resources),
 	.resource = mxcsdhc3_resources,
+};
+
+struct platform_device mxcsdhc4_device = {
+        .name = "mxsdhci",
+        .id = 3,
+        .num_resources = ARRAY_SIZE(mxcsdhc4_resources),
+        .resource = mxcsdhc4_resources,
 };
 
 static struct resource pata_fsl_resources[] = {
@@ -965,7 +846,19 @@ struct platform_device ahci_fsl_device = {
 
 static u64 usb_dma_mask = DMA_BIT_MASK(32);
 
-static struct resource usbotg_resources[] = {
+static struct resource usbotg_host_resources[] = {
+	{
+		.start = OTG_BASE_ADDR,
+		.end = OTG_BASE_ADDR + 0x1ff,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		.start = MXC_INT_USB_OTG,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+
+static struct resource usbotg_udc_resources[] = {
 	{
 		.start = OTG_BASE_ADDR,
 		.end = OTG_BASE_ADDR + 0x1ff,
@@ -996,8 +889,8 @@ struct platform_device mxc_usbdr_udc_device = {
 		.dma_mask = &usb_dma_mask,
 		.coherent_dma_mask = DMA_BIT_MASK(32),
 	},
-	.resource      = usbotg_resources,
-	.num_resources = ARRAY_SIZE(usbotg_resources),
+	.resource      = usbotg_udc_resources,
+	.num_resources = ARRAY_SIZE(usbotg_udc_resources),
 };
 
 struct platform_device mxc_usbdr_otg_device = {
@@ -1014,8 +907,8 @@ struct platform_device mxc_usbdr_otg_device = {
 struct platform_device mxc_usbdr_host_device = {
 	.name = "fsl-ehci",
 	.id = 0,
-	.num_resources = ARRAY_SIZE(usbotg_resources),
-	.resource = usbotg_resources,
+	.num_resources = ARRAY_SIZE(usbotg_host_resources),
+	.resource = usbotg_host_resources,
 	.dev = {
 		.dma_mask = &usb_dma_mask,
 		.coherent_dma_mask = DMA_BIT_MASK(32),
@@ -1256,6 +1149,54 @@ struct platform_device mxc_pxp_client_device = {
 	.id = -1,
 };
 
+struct platform_device mxc_v4l2_device = {
+	.name = "mxc_v4l2_capture",
+	.id = 0,
+};
+
+struct platform_device mxc_v4l2out_device = {
+	.name = "mxc_v4l2_output",
+	.id = 0,
+};
+
+struct resource viim_resources[] = {
+	[0] = {
+		.start  = (GPT1_BASE_ADDR - 0x20000000),
+		.end    = (GPT1_BASE_ADDR - 0x20000000) + PAGE_SIZE - 1,
+		.flags  = IORESOURCE_MEM,
+	},
+	[1] = {
+		.start  = OCOTP_CTRL_BASE_ADDR,
+		.end    = OCOTP_CTRL_BASE_ADDR + PAGE_SIZE - 1,
+		.flags  = IORESOURCE_MEM,
+	},
+};
+struct platform_device mxs_viim = {
+	.name   = "mxs_viim",
+	.id     = -1,
+	.num_resources = ARRAY_SIZE(viim_resources),
+	.resource = viim_resources,
+};
+
+static struct resource dma_apbh_resources[] = {
+	{
+		.start = APBHDMA_BASE_ADDR,
+		.end = APBHDMA_BASE_ADDR + 0x2000 - 1,
+		.flags = IORESOURCE_MEM,
+	},
+};
+
+struct platform_device mxs_dma_apbh_device = {
+	.name = "mxs-dma-apbh",
+	.num_resources = ARRAY_SIZE(dma_apbh_resources),
+	.resource = dma_apbh_resources,
+};
+
+struct platform_device mxc_zq_calib_device = {
+	.name = "mxc_zq_calib",
+	.id = -1,
+};
+
 void __init mx5_init_irq(void)
 {
 	unsigned long tzic_addr;
@@ -1490,22 +1431,12 @@ int __init mxc_init_devices(void)
 		mxc_kpp_resources[0].end -= MX53_OFFSET;
 		rtc_resources[0].start -= MX53_OFFSET;
 		rtc_resources[0].end -= MX53_OFFSET;
-		imx_nfc_resources[0].start = MX53_NFC_BASE_ADDR_AXI;
-		imx_nfc_resources[0].end = MX53_NFC_BASE_ADDR_AXI + 0x1200 - 1;
-		imx_nfc_resources[1].start = MX53_NFC_BASE_ADDR_AXI + 0x1E00;
-		imx_nfc_resources[1].end = MX53_NFC_BASE_ADDR_AXI + 0x1E44 - 1;
-		imx_nfc_resources[2].start -= MX53_OFFSET;
-		imx_nfc_resources[2].end -= MX53_OFFSET;
 		wdt_resources[0].start -= MX53_OFFSET;
 		wdt_resources[0].end -= MX53_OFFSET;
 		pwm1_resources[0].start -= MX53_OFFSET;
 		pwm1_resources[0].end -= MX53_OFFSET;
 		pwm2_resources[0].start -= MX53_OFFSET;
 		pwm2_resources[0].end -= MX53_OFFSET;
-		flexcan0_resources[0].start -= MX53_OFFSET;
-		flexcan0_resources[0].end -= MX53_OFFSET;
-		flexcan1_resources[0].start -= MX53_OFFSET;
-		flexcan1_resources[0].end -= MX53_OFFSET;
 		mxc_fec_resources[0].start -= MX53_OFFSET;
 		mxc_fec_resources[0].end -= MX53_OFFSET;
 		vpu_resources[0].start -= MX53_OFFSET;
@@ -1538,24 +1469,22 @@ int __init mxc_init_devices(void)
 		dvfs_core_resources[0].end -= MX53_OFFSET;
 		dvfs_per_resources[0].start -= MX53_OFFSET;
 		dvfs_per_resources[0].end -= MX53_OFFSET;
-		spdif_resources[0].start -= MX53_OFFSET;
-		spdif_resources[0].end -= MX53_OFFSET;
-		spdif_resources[1].start = MXC_INT_SPDIF_MX53;
-		spdif_resources[1].end = MXC_INT_SPDIF_MX53;
 		mxc_m4if_resources[0].start -= MX53_OFFSET;
 		mxc_m4if_resources[0].end -= MX53_OFFSET;
 		mxc_iim_resources[0].start -= MX53_OFFSET;
 		mxc_iim_resources[0].end -= MX53_OFFSET;
-		mxc_sim_resources[0].start -= MX53_OFFSET;
-		mxc_sim_resources[0].end -= MX53_OFFSET;
 		mxcsdhc1_resources[0].start -= MX53_OFFSET;
 		mxcsdhc1_resources[0].end -= MX53_OFFSET;
 		mxcsdhc2_resources[0].start -= MX53_OFFSET;
 		mxcsdhc2_resources[0].end -= MX53_OFFSET;
 		mxcsdhc3_resources[0].start -= MX53_OFFSET;
 		mxcsdhc3_resources[0].end -= MX53_OFFSET;
-		usbotg_resources[0].start -= MX53_OFFSET;
-		usbotg_resources[0].end -= MX53_OFFSET;
+		mxcsdhc4_resources[0].start -= MX53_OFFSET;
+		mxcsdhc4_resources[0].end -= MX53_OFFSET;
+		usbotg_host_resources[0].start -= MX53_OFFSET;
+		usbotg_host_resources[0].end -= MX53_OFFSET;
+		usbotg_udc_resources[0].start -= MX53_OFFSET;
+		usbotg_udc_resources[0].end -= MX53_OFFSET;
 		usbotg_xcvr_resources[0].start -= MX53_OFFSET;
 		usbotg_xcvr_resources[0].end -= MX53_OFFSET;
 		usbh1_resources[0].start -= MX53_OFFSET;
@@ -1564,32 +1493,35 @@ int __init mxc_init_devices(void)
 		usbh2_resources[0].end -= MX53_OFFSET;
 		mxc_gpu_resources[2].start = MX53_GPU2D_BASE_ADDR;
 		mxc_gpu_resources[2].end = MX53_GPU2D_BASE_ADDR + SZ_4K - 1;
-		mxc_gpu_resources[4].start = MX53_GPU_GMEM_BASE_ADDR;
-		mxc_gpu_resources[4].end = MX53_GPU_GMEM_BASE_ADDR + SZ_256K - 1;
 		mxc_gpu2d_resources[0].start = MX53_GPU2D_BASE_ADDR;
 		mxc_gpu2d_resources[0].end = MX53_GPU2D_BASE_ADDR + SZ_4K - 1;
+		if (cpu_is_mx53()) {
+			mxc_gpu_resources[4].start = MX53_GPU_GMEM_BASE_ADDR;
+			mxc_gpu_resources[4].end = MX53_GPU_GMEM_BASE_ADDR
+						+ SZ_256K - 1;
+		} else {
+			mxc_gpu_resources[1].start = 0;
+			mxc_gpu_resources[1].end = 0;
+			mxc_gpu_resources[3].start = 0;
+			mxc_gpu_resources[3].end = 0;
+			mxc_gpu_resources[4].start = 0;
+			mxc_gpu_resources[4].end = 0;
+		}
 		ipu_resources[0].start = MX53_IPU_CTRL_BASE_ADDR;
 		ipu_resources[0].end = MX53_IPU_CTRL_BASE_ADDR + SZ_128M - 1;
 		mlb_resources[0].start -= MX53_OFFSET;
 		mlb_resources[0].end -= MX53_OFFSET;
-		mxc_nandv2_mtd_device.resource[0].start =
-					MX53_NFC_BASE_ADDR_AXI;
-		mxc_nandv2_mtd_device.resource[0].end =
-					MX53_NFC_BASE_ADDR_AXI + SZ_8K - 1;
-		mxc_nandv2_mtd_device.resource[1].start -= MX53_OFFSET;
-		mxc_nandv2_mtd_device.resource[1].end -= MX53_OFFSET;
-		ldb_resources[0].start -=  MX53_OFFSET;
-		ldb_resources[0].end -=  MX53_OFFSET;
-	} else if (cpu_is_mx51_rev(CHIP_REV_2_0) < 0) {
-		scc_resources[1].start += 0x8000;
-		scc_resources[1].end += 0x8000;
 	}
 
-
-	if (cpu_is_mx51() || cpu_is_mx53())
-		mxc_init_scc_iram();
 	mxc_init_gpu2d();
 	return 0;
 }
 postcore_initcall(mxc_init_devices);
+
+int dma_needs_bounce(struct device *dev, dma_addr_t addr, size_t size)
+{
+	return ((addr & 63) || (size & 63));
+}
+EXPORT_SYMBOL(dma_needs_bounce);
+
 

@@ -405,9 +405,9 @@ static struct mc13892_platform_data mc13892_plat = {
 
 static struct spi_board_info __initdata mc13892_spi_device = {
 	.modalias = "pmic_spi",
-	.irq = IOMUX_TO_IRQ(MX50_PIN_ECSPI2_MISO),
+	.irq = IOMUX_TO_IRQ(MX50_PIN_UART1_CTS),
 	.max_speed_hz = 6000000,	/* max spi SCK clock speed in HZ */
-	.bus_num = 3,
+	.bus_num = 1,
 	.chip_select = 0,
 	.platform_data = &mc13892_plat,
 };

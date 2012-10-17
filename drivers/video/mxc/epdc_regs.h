@@ -21,9 +21,9 @@
 
 extern void __iomem *epdc_base;
 
-//*************************************
-// Register addresses
-//*************************************
+/*************************************
+ * Register addresses
+ **************************************/
 
 #define EPDC_CTRL			(epdc_base + 0x000)
 #define EPDC_CTRL_SET			(epdc_base + 0x004)

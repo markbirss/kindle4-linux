@@ -482,7 +482,7 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 }
 
 asmlinkage void __exception
-do_PrefetchAbort(unsigned long addr, struct pt_regs *regs)
+do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
 {
 	do_translation_fault(addr, 0, regs);
 }

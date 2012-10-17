@@ -65,8 +65,8 @@ static const struct snd_pcm_hardware imx_pcm_hardware = {
 	.buffer_bytes_max = SND_RAM_SIZE,
 	.period_bytes_max = SND_RAM_SIZE / 4,
 #else
-	.buffer_bytes_max = 64 * 1024,
-	.period_bytes_max = 16 * 1024,
+	.buffer_bytes_max = 128 * 1024,
+	.period_bytes_max = 64 * 1024,
 #endif
 	.period_bytes_min = 2 * SZ_1K,
 	.periods_min = 2,
@@ -296,7 +296,7 @@ static void audio_dma_irq(void *data)
 	prtd->periods++;
 	prtd->periods %= runtime->periods;
 
-	dbg("irq per %d offset %x\n", prtd->periods,
+	pr_debug("irq per %d offset %x\n", prtd->periods,
 	    frames_to_bytes(runtime, runtime->period_size) * prtd->periods);
 
 	if (prtd->active)

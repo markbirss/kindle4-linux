@@ -24,4 +24,7 @@ snd-soc-imx-3stack-bt-objs := imx-3stack-bt.o
 obj-$(CONFIG_SND_SOC_IMX_3STACK_BLUETOOTH) += snd-soc-imx-3stack-bt.o
 snd-soc-imx-3stack-cs42888-objs := imx-3stack-cs42888.o
 obj-$(CONFIG_SND_SOC_IMX_3STACK_CS42888) += snd-soc-imx-3stack-cs42888.o
-
+snd-soc-imx-yoshi-wm8962-objs := imx-yoshi-wm8960.o
+obj-$(CONFIG_SND_SOC_IMX_YOSHI_WM8962) += snd-soc-imx-yoshi-wm8962.o
+snd-soc-imx-yoshime-wm8960-objs := imx-yoshime-wm8960.o
+obj-$(CONFIG_SND_SOC_IMX_YOSHIME_WM8960) += snd-soc-imx-yoshime-wm8960.o

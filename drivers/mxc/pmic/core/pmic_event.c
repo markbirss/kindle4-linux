@@ -32,6 +32,7 @@
 #include <linux/errno.h>
 #include <linux/interrupt.h>
 #include <linux/list.h>
+#include <linux/semaphore.h>
 #include <linux/pmic_external.h>
 #include <linux/pmic_status.h>
 #include "pmic.h"
@@ -53,7 +54,7 @@ typedef struct {
 } pmic_event_callback_list_t;
 
 /* Create a mutex to be used to prevent concurrent access to the event list */
-static DECLARE_MUTEX(event_mutex);
+static struct semaphore event_mutex;
 
 /* This is a pointer to the event handler array. It defines the currently
  * active set of events and user-defined callback functions.
@@ -72,6 +73,7 @@ void pmic_event_list_init(void)
 		INIT_LIST_HEAD(&pmic_events[i]);
 	}
 
+	semaphore_init(&event_mutex);
 	sema_init(&event_mutex, 1);
 	return;
 }

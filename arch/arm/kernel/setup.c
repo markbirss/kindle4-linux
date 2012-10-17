@@ -42,6 +42,8 @@
 #include <asm/traps.h>
 #include <asm/unwind.h>
 
+#include <mach/boardid.h>
+
 #include "compat.h"
 #include "atags.h"
 
@@ -88,9 +90,38 @@ EXPORT_SYMBOL(system_serial_low);
 unsigned int system_serial_high;
 EXPORT_SYMBOL(system_serial_high);
 
+char system_soc_info[SYSTEM_SOC_INFO_SIZE];
+EXPORT_SYMBOL(system_soc_info);
+
 unsigned int elf_hwcap;
 EXPORT_SYMBOL(elf_hwcap);
 
+#if defined(CONFIG_MACH_MX50_YOSHI) || defined(CONFIG_MACH_MX50_TEQUILA) || defined(CONFIG_MACH_MX50_YOSHIME)
+
+unsigned char system_rev16[REVISION16_SIZE];
+EXPORT_SYMBOL(system_rev16);
+
+unsigned char system_serial16[SERIAL16_SIZE];
+EXPORT_SYMBOL(system_serial16);
+
+unsigned char system_serial20[SERIAL20_SIZE];
+EXPORT_SYMBOL(system_serial20);
+
+unsigned char system_bootmode[BOOTMODE_SIZE];
+EXPORT_SYMBOL(system_bootmode);
+
+unsigned char system_postmode[BOOTMODE_SIZE];
+EXPORT_SYMBOL(system_postmode);
+
+unsigned int system_post;
+EXPORT_SYMBOL(system_post);
+
+unsigned char system_mac_addr[MAC_ADDR_SIZE];
+EXPORT_SYMBOL(system_mac_addr);
+
+unsigned char system_mac_sec[MAC_SEC_SIZE];
+EXPORT_SYMBOL(system_mac_sec);
+#endif
 
 #ifdef MULTI_CPU
 struct processor processor;
@@ -221,7 +252,7 @@ int cpu_architecture(void)
 		 * Register 0 and check for VMSAv7 or PMSAv7 */
 		asm("mrc	p15, 0, %0, c0, c1, 4"
 		    : "=r" (mmfr0));
-		if ((mmfr0 & 0x0000000f) == 0x00000003 ||
+		if ((mmfr0 & 0x0000000f) >= 0x00000003 ||
 		    (mmfr0 & 0x000000f0) == 0x00000030)
 			cpu_arch = CPU_ARCH_ARMv7;
 		else if ((mmfr0 & 0x0000000f) == 0x00000002 ||
@@ -618,9 +649,63 @@ static int __init parse_tag_revision(const struct tag *tag)
 
 __tagtable(ATAG_REVISION, parse_tag_revision);
 
+#if defined(CONFIG_MACH_MX50_YOSHI) || defined(CONFIG_MACH_MX50_TEQUILA) || defined(CONFIG_MACH_MX50_YOSHIME)
+static int __init parse_tag_serial16(const struct tag *tag)
+{
+	memcpy(system_serial16, tag->u.id16.data, SERIAL16_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_SERIAL16, parse_tag_serial16);
+
+static int __init parse_tag_revision16(const struct tag *tag)
+{
+	memcpy(system_rev16, tag->u.id16.data, REVISION16_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_REVISION16, parse_tag_revision16);
+
+static int __init parse_tag_serial20(const struct tag *tag)
+{
+	memcpy(system_serial20, tag->u.id20.data, SERIAL20_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_SERIAL20, parse_tag_serial20);
+
+static int __init parse_tag_post(const struct tag *tag)
+{
+	system_post = tag->u.post.failure;
+	return 0;
+}
+
+__tagtable(ATAG_POST, parse_tag_post);
+
+static int __init parse_tag_mac(const struct tag *tag)
+{
+	memcpy(system_mac_addr, tag->u.macaddr.address, MAC_ADDR_SIZE);
+	memcpy(system_mac_sec, tag->u.macaddr.secret, MAC_SEC_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_MACADDR, parse_tag_mac);
+
+static int __init parse_tag_bootmode(const struct tag *tag)
+{
+	memcpy(system_bootmode, tag->u.bootmode.boot, BOOTMODE_SIZE);
+	memcpy(system_postmode, tag->u.bootmode.post, BOOTMODE_SIZE);
+	return 0;
+}
+
+__tagtable(ATAG_BOOTMODE, parse_tag_bootmode);
+#endif
+
 static int __init parse_tag_cmdline(const struct tag *tag)
 {
+#ifdef DEVELOPMENT_MODE
 	strlcpy(default_command_line, tag->u.cmdline.cmdline, COMMAND_LINE_SIZE);
+#endif
 	return 0;
 }
 
@@ -717,9 +802,6 @@ void __init setup_arch(char **cmdline_p)
 	if (tags->hdr.tag != ATAG_CORE)
 		tags = (struct tag *)&init_tags;
 
-	if (mdesc->fixup)
-		mdesc->fixup(mdesc, tags, &from, &meminfo);
-
 	if (tags->hdr.tag == ATAG_CORE) {
 		if (meminfo.nr_banks != 0)
 			squash_mem_tags(tags);
@@ -727,10 +809,18 @@ void __init setup_arch(char **cmdline_p)
 		parse_tags(tags);
 	}
 
+	if (mdesc->fixup)
+		mdesc->fixup(mdesc, tags, &from, &meminfo);
+
 	init_mm.start_code = (unsigned long) _text;
 	init_mm.end_code   = (unsigned long) _etext;
 	init_mm.end_data   = (unsigned long) _edata;
 	init_mm.brk	   = (unsigned long) _end;
+
+	if (mx50_board_is(BOARD_ID_FINKLE_EVT1))
+		strcat(default_command_line, " console=ttymxc3,115200");
+	else
+		strcat(default_command_line, " console=ttymxc0,115200");
 
 	memcpy(boot_command_line, from, COMMAND_LINE_SIZE);
 	boot_command_line[COMMAND_LINE_SIZE-1] = '\0';
@@ -853,8 +943,38 @@ static int c_show(struct seq_file *m, void *v)
 
 	seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
-	seq_printf(m, "Serial\t\t: %08x%08x\n",
-		   system_serial_high, system_serial_low);
+
+	if (system_serial20[0]) {
+		/* if 20-byte serial was initialized, print that. */
+		char serial_num[SERIAL20_SIZE + 1];
+
+		memset(serial_num, '\0', sizeof(serial_num));
+		strncpy(serial_num, system_serial20, SERIAL20_SIZE);
+		seq_printf(m, "Serial\t\t: \"%s\"\n", serial_num);
+	} else if (system_serial16[0]) {
+		/* if 16-byte serial was initialized, print that. */
+		char serial_num[SERIAL16_SIZE + 1];
+
+		memset(serial_num, '\0', sizeof(serial_num));
+		strncpy(serial_num, system_serial16, SERIAL16_SIZE);
+		seq_printf(m, "Serial\t\t: \"%s\"\n", serial_num);
+	} else {
+		/* no 16-byte serial, use the 64-bit one. */
+		seq_printf(m, "Serial\t\t: %08x%08x\n",
+			   system_serial_high, system_serial_low);
+
+		if (strlen(system_soc_info))
+			seq_printf(m, "SoC Info\t: %s\n",  system_soc_info);
+	}
+
+	/* if 16-byte revision was initialized, print that. */
+	if (system_rev16[0]) {
+		char board_id[REVISION16_SIZE + 1];
+
+		memset(board_id, '\0', sizeof(board_id));
+		strncpy(board_id, system_rev16, REVISION16_SIZE);
+		seq_printf(m, "BoardId\t\t: \"%s\"\n", board_id);
+	}
 
 	return 0;
 }

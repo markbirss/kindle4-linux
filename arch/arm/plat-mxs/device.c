@@ -398,18 +398,6 @@ static struct platform_device mxs_flexcan[] = {
 };
 #endif
 
-#if defined(CONFIG_CRYPTO_DEV_DCP)
-static struct platform_device mxs_dcp = {
-	.name = "dcp",
-	.id = 0,
-	.dev	= {
-		.release = mxs_nop_release,
-		.dma_mask	= &common_dmamask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-	},
-};
-#endif
-
 #if defined(CONFIG_BATTERY_MXS)
 static struct platform_device mxs_battery = {
 	.name   = "mxs-battery",
@@ -661,14 +649,6 @@ static struct mxs_dev_lookup dev_lookup[] = {
 	.name = "FlexCAN",
 	.size = ARRAY_SIZE(mxs_flexcan),
 	.pdev = mxs_flexcan,
-	},
-#endif
-
-#if defined(CONFIG_CRYPTO_DEV_DCP)
-	{
-	.name = "dcp",
-	.size = 1,
-	.pdev = &mxs_dcp,
 	},
 #endif
 

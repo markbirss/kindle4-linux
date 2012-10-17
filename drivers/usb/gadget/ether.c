@@ -356,7 +356,7 @@ static int __init eth_bind(struct usb_composite_dev *cdev)
 
 	dev_info(&gadget->dev, "%s, version: " DRIVER_VERSION "\n",
 			DRIVER_DESC);
-
+	gadget->configured = 1;
 	return 0;
 
 fail:
@@ -366,7 +366,9 @@ fail:
 
 static int __exit eth_unbind(struct usb_composite_dev *cdev)
 {
+	struct usb_gadget	*gadget = cdev->gadget;
 	gether_cleanup();
+	gadget->configured = 0;
 	return 0;
 }
 

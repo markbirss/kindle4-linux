@@ -354,8 +354,8 @@ static int ipu_probe(struct platform_device *pdev)
 	g_di_clk[0] = plat_data->di_clk[0];
 	g_di_clk[1] = plat_data->di_clk[1];
 
-	g_csi_clk[0] = clk_get(&pdev->dev, "csi_mclk1");
-	g_csi_clk[1] = clk_get(&pdev->dev, "csi_mclk2");
+	g_csi_clk[0] = plat_data->csi_clk[0];
+	g_csi_clk[1] = plat_data->csi_clk[1];
 
 	__raw_writel(0x807FFFFF, IPU_MEM_RST);
 	while (__raw_readl(IPU_MEM_RST) & 0x80000000) ;
@@ -1863,7 +1863,30 @@ int32_t ipu_disable_channel(ipu_channel_t channel, bool wait_for_stop)
 
 	if ((channel == MEM_BG_SYNC) || (channel == MEM_FG_SYNC) ||
 	    (channel == MEM_DC_SYNC)) {
+		int timeout = 50;
+		int irq;
+
 		_ipu_dp_dc_disable(channel, false);
+
+		/*
+		 * wait for display channel EOF then disable IDMAC,
+		 * it avoid NFB4EOF error.
+		 */
+		if (channel == MEM_BG_SYNC)
+			irq = IPU_IRQ_BG_SYNC_EOF;
+		if (channel == MEM_FG_SYNC)
+			irq = IPU_IRQ_FG_SYNC_EOF;
+		else
+			irq = IPU_IRQ_DC_SYNC_EOF;
+		__raw_writel(IPUIRQ_2_MASK(irq),
+			     IPUIRQ_2_STATREG(irq));
+		while ((__raw_readl(IPUIRQ_2_STATREG(irq)) &
+			IPUIRQ_2_MASK(irq)) == 0) {
+			msleep(10);
+			timeout -= 10;
+			if (timeout <= 0)
+				break;
+		}
 	} else if (wait_for_stop) {
 		while (idma_is_set(IDMAC_CHA_BUSY, in_dma) ||
 		       idma_is_set(IDMAC_CHA_BUSY, out_dma) ||
@@ -1949,8 +1972,6 @@ int32_t ipu_disable_channel(ipu_channel_t channel, bool wait_for_stop)
 
 	g_channel_enable_mask &= ~(1L << IPU_CHAN_ID(channel));
 
-	spin_unlock_irqrestore(&ipu_lock, lock_flags);
-
 	/* Set channel buffers NOT to be ready */
 	if (idma_is_valid(in_dma)) {
 		ipu_clear_buffer_ready(channel, IPU_VIDEO_IN_BUFFER, 0);
@@ -1968,6 +1989,8 @@ int32_t ipu_disable_channel(ipu_channel_t channel, bool wait_for_stop)
 		ipu_clear_buffer_ready(channel, IPU_ALPHA_IN_BUFFER, 0);
 		ipu_clear_buffer_ready(channel, IPU_ALPHA_IN_BUFFER, 1);
 	}
+
+	spin_unlock_irqrestore(&ipu_lock, lock_flags);
 
 	return 0;
 }

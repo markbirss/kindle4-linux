@@ -49,7 +49,7 @@
 #define IOMUXSW_INPUT_CTL	(IO_ADDRESS(IOMUXC_BASE_ADDR))
 
 static u8 iomux_pin_res_table[(0x3F0 / 4) + 1];
-static DEFINE_SPINLOCK(gpio_mux_lock);
+static DEFINE_ATOMIC_SPINLOCK(gpio_mux_lock);
 
 static inline void *_get_sw_pad(void)
 {
@@ -132,7 +132,7 @@ static int iomux_config_mux(iomux_pin_name_t pin, iomux_pin_cfg_t config)
 	u8 *rp;
 
 	BUG_ON((mux_reg > _get_mux_end()) || (mux_reg < IOMUXSW_MUX_CTL));
-	spin_lock(&gpio_mux_lock);
+	atomic_spin_lock(&gpio_mux_lock);
 
 	if (config == IOMUX_CONFIG_GPIO)
 		mux_data = PIN_TO_ALT_GPIO(pin);
@@ -156,7 +156,7 @@ static int iomux_config_mux(iomux_pin_name_t pin, iomux_pin_cfg_t config)
 		ret = -EINVAL;
 	}
 	*rp = mux_data;
-	spin_unlock(&gpio_mux_lock);
+	atomic_spin_unlock(&gpio_mux_lock);
 	return ret;
 }
 

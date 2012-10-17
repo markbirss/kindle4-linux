@@ -306,7 +306,7 @@ int armv7_request_interrupts(int *irqs, int nr)
 
 	for (i = 0; i < nr; i++) {
 		ret = request_irq(irqs[i], armv7_pmnc_interrupt,
-				IRQF_DISABLED, "CP15 PMNC", NULL);
+				IRQF_DISABLED | IRQF_NODELAY, "CP15 PMNC", NULL);
 		if (ret != 0) {
 			printk(KERN_ERR "oprofile: unable to request IRQ%u"
 				" for ARMv7\n",

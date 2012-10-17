@@ -135,6 +135,11 @@ config REGULATOR_MC34704
 	depends on MXC_PMIC_MC34704
 	default y
 
+config REGULATOR_MC34708
+	tristate "MC34708 Regulator Support"
+	depends on MXC_PMIC_MC34708
+	default y
+
 config REGULATOR_STMP3XXX
 	tristate "STMP3xxx Regulator Support"
 	depends on REGULATOR
@@ -156,6 +161,18 @@ config REGULATOR_MC9S08DZ60
 config REGULATOR_MAX17135
 	tristate "Maxim MAX17135 Regulator Support"
 	depends on REGULATOR
+	default n
+
+config REGULATOR_PAPYRUS
+	tristate "Papyrus Regulator Support"
+	depends on REGULATOR
+	default n
+
+config REGULATOR_PAPYRUS_V2
+	tristate "Papyrus V2 Regulator Support"
+	depends on REGULATOR
+	depends on MACH_MX50_YOSHIME
+	depends on !REGULATOR_PAPYRUS
 	default n
 
 endif

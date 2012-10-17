@@ -221,11 +221,11 @@ static struct mxc_dvfs_platform_data dvfs_core_data = {
 	.reg_id = "SW1",
 	.clk1_id = "cpu_clk",
 	.clk2_id = "gpc_dvfs_clk",
-	.gpc_cntr_reg_addr = MXC_GPC_CNTR,
-	.gpc_vcr_reg_addr = MXC_GPC_VCR,
-	.ccm_cdcr_reg_addr = MXC_CCM_CDCR,
-	.ccm_cacrr_reg_addr = MXC_CCM_CACRR,
-	.ccm_cdhipr_reg_addr = MXC_CCM_CDHIPR,
+	.gpc_cntr_offset = MXC_GPC_CNTR_OFFSET,
+	.gpc_vcr_offset = MXC_GPC_VCR_OFFSET,
+	.ccm_cdcr_offset = MXC_CCM_CDCR_OFFSET,
+	.ccm_cacrr_offset = MXC_CCM_CACRR_OFFSET,
+	.ccm_cdhipr_offset = MXC_CCM_CDHIPR_OFFSET,
 	.prediv_mask = 0x1F800,
 	.prediv_offset = 11,
 	.prediv_val = 3,
@@ -829,6 +829,8 @@ static void __init mxc_board_init(void)
 {
 	mxc_ipu_data.di_clk[0] = clk_get(NULL, "ipu_di0_clk");
 	mxc_ipu_data.di_clk[1] = clk_get(NULL, "ipu_di1_clk");
+	mxc_ipu_data.csi_clk[0] = clk_get(NULL, "csi_mclk1");
+	mxc_ipu_data.csi_clk[1] = clk_get(NULL, "csi_mclk2");
 
 	mxc_spdif_data.spdif_core_clk = clk_get(NULL, "spdif_xtal_clk");
 	clk_put(mxc_spdif_data.spdif_core_clk);
@@ -870,6 +872,8 @@ static void __init mxc_board_init(void)
 	mxc_register_device(&mxc_ssi2_device, NULL);
 	mxc_register_device(&mxc_alsa_spdif_device, &mxc_spdif_data);
 	mxc_register_device(&mxc_fec_device, NULL);
+	mxc_register_device(&mxc_v4l2_device, NULL);
+	mxc_register_device(&mxc_v4l2out_device, NULL);
 
 	mx51_babbage_init_mc13892();
 

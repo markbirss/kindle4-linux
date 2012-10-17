@@ -72,6 +72,18 @@ config SND_SOC_IMX_3STACK_BLUETOOTH
    Say Y if you want to add support for Soc audio on IMX 3STACK
    with the BLUETOOTH
 
+config SND_SOC_IMX_YOSHI_WM8962
+ tristate "SoC Audio support for MX50 - YOSHI WM8962"
+ select SND_MXC_SOC_SSI
+ select SND_SOC_WM8962
+ help
+
+config SND_SOC_IMX_YOSHIME_WM8960
+ tristate "SoC Audio support for MX50 - YOSHIME WM8960"
+ select SND_MXC_SOC_SSI
+ select SND_SOC_WM8960
+ help
+
 config SND_SOC_IMX_3STACK_CS42888
  tristate "SoC Audio support for IMX - CS42888"
  select SND_MXC_SOC_ESAI

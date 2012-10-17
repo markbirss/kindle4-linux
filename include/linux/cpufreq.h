@@ -94,7 +94,7 @@ struct cpufreq_policy {
         unsigned int		policy; /* see above */
 	struct cpufreq_governor	*governor; /* see below */
 
-	struct work_struct	update; /* if update_policy() needs to be
+	struct delayed_work	update; /* if update_policy() needs to be
 					 * called, but you're in IRQ context */
 
 	struct cpufreq_real_policy	user_policy;

@@ -125,9 +125,9 @@ static int gpio_set_irq_type(u32 irq, u32 type)
 
 	/* set the correct irq handler */
 	if (type & IRQ_TYPE_EDGE_BOTH)
-		set_irq_handler(irq, handle_edge_irq);
+		__set_irq_handler_unlocked(irq, handle_edge_irq);
 	else if (type & (IRQ_TYPE_LEVEL_LOW | IRQ_TYPE_LEVEL_HIGH))
-		set_irq_handler(irq, handle_level_irq);
+		__set_irq_handler_unlocked(irq, handle_level_irq);
 
 	reg += GPIO_ICR1 + ((gpio & 0x10) >> 2); /* lower or upper register */
 	bit = gpio & 0xf;

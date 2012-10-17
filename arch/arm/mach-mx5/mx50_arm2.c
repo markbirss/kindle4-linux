@@ -60,6 +60,7 @@
 #include "mx50_pins.h"
 #include "devices.h"
 #include "usb.h"
+#include "dma-apbh.h"
 
 extern void __init mx50_arm2_io_init(void);
 extern int __init mx50_arm2_init_mc13892(void);
@@ -143,6 +144,8 @@ static struct mxc_i2c_platform_data mxci2c_data = {
 static struct mxc_srtc_platform_data srtc_data = {
 	.srtc_sec_mode_addr = OCOTP_CTRL_BASE_ADDR + 0x80,
 };
+
+static int z160_version = 1;
 
 #define mV_to_uV(mV) (mV * 1000)
 #define uV_to_mV(uV) (uV / 1000)
@@ -271,6 +274,8 @@ static int sdhc_write_protect(struct device *dev)
 {
 	unsigned short rc = 0;
 
+	return 0;
+
 	if (to_platform_device(dev)->id == 0)
 		rc = gpio_get_value(IOMUX_TO_GPIO(MX50_PIN_ECSPI2_SS0));
 	else
@@ -282,6 +287,9 @@ static int sdhc_write_protect(struct device *dev)
 static unsigned int sdhc_get_card_det_status(struct device *dev)
 {
 	int ret;
+
+	return 0;
+
 	if (to_platform_device(dev)->id == 0)
 		ret = gpio_get_value(IOMUX_TO_GPIO(MX50_PIN_EIM_CRE));
 	else
@@ -296,7 +304,7 @@ static struct mxc_mmc_platform_data mmc1_data = {
 	.caps = MMC_CAP_4_BIT_DATA,
 	.min_clk = 400000,
 	.max_clk = 50000000,
-	.card_inserted_state = 0,
+	.card_inserted_state = 1,
 	.status = sdhc_get_card_det_status,
 	.wp_status = sdhc_write_protect,
 	.clock_mmc = "esdhc_clk",
@@ -306,13 +314,41 @@ static struct mxc_mmc_platform_data mmc1_data = {
 static struct mxc_mmc_platform_data mmc2_data = {
 	.ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30
 		| MMC_VDD_31_32,
-	.caps = MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA,
+	.caps = MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA | MMC_CAP_DATA_DDR,
 	.min_clk = 400000,
-	.max_clk = 50000000,
+	.max_clk = 40000000,
+	.dll_override_en = 1,
+	.dll_delay_cells = 0xc,
 	.card_inserted_state = 0,
 	.status = sdhc_get_card_det_status,
 	.wp_status = sdhc_write_protect,
 	.clock_mmc = "esdhc_clk",
+};
+
+static struct mxc_mmc_platform_data mmc3_data = {
+        .ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30
+                | MMC_VDD_31_32,
+        .caps = MMC_CAP_4_BIT_DATA,
+        .min_clk = 150000,
+        .max_clk = 52000000,
+        .card_inserted_state = 1,
+        .status = sdhc_get_card_det_status,
+        .wp_status = sdhc_write_protect,
+        .clock_mmc = "esdhc_clk",
+	.power_mmc = NULL,
+};
+
+static struct mxc_mmc_platform_data mmc4_data = {
+        .ocr_mask = MMC_VDD_27_28 | MMC_VDD_28_29 | MMC_VDD_29_30
+                | MMC_VDD_31_32,
+        .caps = MMC_CAP_4_BIT_DATA,
+        .min_clk = 150000,
+        .max_clk = 50000000,
+        .card_inserted_state = 1,
+        .status = sdhc_get_card_det_status,
+        .wp_status = sdhc_write_protect,
+        .clock_mmc = "esdhc_clk",
+	.power_mmc = NULL,
 };
 
 static int mxc_sgtl5000_amp_enable(int enable)
@@ -418,6 +454,13 @@ static void __init fixup_mxc_board(struct machine_desc *desc, struct tag *tags,
 	set_num_cpu_wp = mx50_arm2_set_num_cpu_wp;
 }
 
+#define FAKE_MMC_DETECT_IRQ	229
+
+static struct mxs_dma_plat_data dma_apbh_data = {
+	.chan_base = MXS_DMA_CHANNEL_AHB_APBH,
+	.chan_num = MXS_MAX_DMA_CHANNELS,
+};
+
 /*!
  * Board specific initialization.
  */
@@ -428,12 +471,17 @@ static void __init mxc_board_init(void)
 	mxcsdhc2_device.resource[2].end = IOMUX_TO_IRQ(MX50_PIN_SD2_CD);
 	mxcsdhc1_device.resource[2].start = IOMUX_TO_IRQ(MX50_PIN_EIM_CRE);
 	mxcsdhc1_device.resource[2].end = IOMUX_TO_IRQ(MX50_PIN_EIM_CRE);
+	mxcsdhc3_device.resource[2].start = FAKE_MMC_DETECT_IRQ; 
+        mxcsdhc3_device.resource[2].end = FAKE_MMC_DETECT_IRQ; 
+        mxcsdhc4_device.resource[2].start = IOMUX_TO_IRQ(MX50_PIN_DISP_D15);
+        mxcsdhc4_device.resource[2].end = IOMUX_TO_IRQ(MX50_PIN_DISP_D15);
 
 	mxc_cpu_common_init();
 	mxc_register_gpios();
 	mx50_arm2_io_init();
 
 	mxc_register_device(&mxc_dma_device, NULL);
+	mxc_register_device(&mxs_dma_apbh_device, &dma_apbh_data);
 	mxc_register_device(&mxc_wdt_device, NULL);
 	mxc_register_device(&mxcspi1_device, &mxcspi1_data);
 	mxc_register_device(&mxcspi3_device, &mxcspi3_data);
@@ -441,9 +489,11 @@ static void __init mxc_board_init(void)
 	mxc_register_device(&mxci2c_devices[1], &mxci2c_data);
 	mxc_register_device(&mxci2c_devices[2], &mxci2c_data);
 
+	mx50_arm2_init_mc13892();
+
 	mxc_register_device(&mxc_rtc_device, &srtc_data);
 	mxc_register_device(&mxc_w1_master_device, &mxc_w1_data);
-	mxc_register_device(&gpu_device, NULL);
+	mxc_register_device(&gpu_device, &z160_version);
 	mxc_register_device(&mxc_pxp_device, NULL);
 	mxc_register_device(&mxc_pxp_client_device, NULL);
 	/*
@@ -455,8 +505,11 @@ static void __init mxc_board_init(void)
 
 /*	mxc_register_device(&mxc_keypad_device, &keypad_plat_data); */
 
-	mxc_register_device(&mxcsdhc1_device, &mmc1_data);
-	mxc_register_device(&mxcsdhc2_device, &mmc2_data);
+//	mxc_register_device(&mxcsdhc1_device, &mmc1_data);
+//	mxc_register_device(&mxcsdhc2_device, &mmc2_data);
+	mxc_register_device(&mxcsdhc3_device, &mmc4_data);
+	mxc_register_device(&mxcsdhc4_device, &mmc3_data);
+
 	mxc_register_device(&mxc_ssi1_device, NULL);
 	mxc_register_device(&mxc_ssi2_device, NULL);
 	mxc_register_device(&mxc_fec_device, &fec_data);
@@ -470,8 +523,8 @@ static void __init mxc_board_init(void)
 	mxc_register_device(&epdc_device, NULL);
 	mxc_register_device(&lcd_wvga_device, &lcd_wvga_data);
 	mxc_register_device(&elcdif_device, &fb_data[0]);
+	mxc_register_device(&mxs_viim, NULL);
 
-	mx50_arm2_init_mc13892();
 /*
 	pm_power_off = mxc_power_off;
 	*/

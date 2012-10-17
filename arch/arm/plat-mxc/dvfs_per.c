@@ -127,7 +127,7 @@ enum {
 
 #define LOW_BUS_FREQ 24000000
 
-DEFINE_SPINLOCK(mxc_dvfs_per_lock);
+DEFINE_ATOMIC_SPINLOCK(mxc_dvfs_per_lock);
 
 static void dvfs_per_load_config(void)
 {
@@ -297,7 +297,7 @@ static void dvfs_per_handler(struct work_struct *work)
 		}
 
 #ifndef DVFS_SW_WORKAROUND
-		spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
+		atomic_spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
 		reg = __raw_readl(dvfsper_plt_data->membase
 				  + MXC_DVFS_PER_PMCR0);
 		reg &= ~MXC_DVFSPMCR0_UDCS;
@@ -328,7 +328,7 @@ static void dvfs_per_handler(struct work_struct *work)
 			udelay(10);
 			retry--;
 		}
-		spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
+		atomic_spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
 #else
 		/*Set the frequencies manually */
 		rate = clk_get_rate(axi_b_clk);
@@ -376,7 +376,7 @@ static void dvfs_per_handler(struct work_struct *work)
 #endif
 
 #ifndef DVFS_SW_WORKAROUND
-		spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
+		atomic_spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
 		reg = __raw_readl(dvfsper_plt_data->membase
 				  + MXC_DVFS_PER_PMCR0);
 		reg |= MXC_DVFSPMCR0_UDCS;
@@ -407,7 +407,7 @@ static void dvfs_per_handler(struct work_struct *work)
 			udelay(10);
 			retry--;
 		}
-		spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
+		atomic_spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
 
 	if (retry < 0)
 		printk(KERN_ERR "****ERROR- DVFS\n");
@@ -541,7 +541,7 @@ static int start(void)
 
 	stop_sdram_autogating();
 
-	spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
+	atomic_spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
 
 	clk_enable(dvfs_clk);
 
@@ -580,7 +580,7 @@ static int start(void)
 	__raw_writel(reg, dvfsper_plt_data->membase + MXC_DVFS_PER_PMCR0);
 
 	dvfs_per_is_active = 1;
-	spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
+	atomic_spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
 
 	printk(KERN_DEBUG "DVFS PER is started\n");
 
@@ -610,7 +610,7 @@ static void stop(void)
 		udelay(100);
 #endif
 
-		spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
+		atomic_spin_lock_irqsave(&mxc_dvfs_per_lock, flags);
 
 		/* Mask dvfs irq, disable DVFS */
 		reg = __raw_readl(dvfsper_plt_data->membase
@@ -629,7 +629,7 @@ static void stop(void)
 		__raw_writel(reg, dvfsper_plt_data->membase
 				  + MXC_DVFS_PER_PMCR0);
 
-		spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
+		atomic_spin_unlock_irqrestore(&mxc_dvfs_per_lock, flags);
 		clk_disable(dvfs_clk);
 
 		start_sdram_autogating();

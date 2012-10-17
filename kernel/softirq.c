@@ -133,13 +133,7 @@ void softirq_check_pending_idle(void)
  */
 void softirq_check_pending_idle(void)
 {
-	static int rate_limit;
-
-	if (rate_limit < 10) {
-		printk(KERN_ERR "NOHZ: local_softirq_pending %02x\n",
-		       local_softirq_pending());
-		rate_limit++;
-	}
+	/* Do Nothing */
 }
 
 #endif

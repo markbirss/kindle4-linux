@@ -606,6 +606,11 @@ asmlinkage void __init start_kernel(void)
 	vfs_caches_init_early();
 	sort_main_extable();
 	trap_init();
+
+#if defined(CONFIG_MXC_WDOG_PRINTK_BUF)
+	reserve_bootmem((u32)MXC_WDOG_PRINTK_BUF_BASE, (u32)MXC_WDOG_PRINTK_BUF_SIZE, BOOTMEM_EXCLUSIVE);
+#endif
+
 	mm_init();
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the

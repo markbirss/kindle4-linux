@@ -775,29 +775,6 @@ void _ipu_dp_dc_disable(ipu_channel_t channel, bool swap)
 			if (timeout <= 0)
 				break;
 		}
-
-		timeout = 50;
-
-		/*
-		 * Wait for DC triple buffer to empty,
-		 * this check is useful for tv overlay.
-		 */
-		if (g_dc_di_assignment[dc_chan] == 0)
-			while ((__raw_readl(DC_STAT) & 0x00000002)
-			       != 0x00000002) {
-				msleep(2);
-				timeout -= 2;
-				if (timeout <= 0)
-					break;
-			}
-		else if (g_dc_di_assignment[dc_chan] == 1)
-			while ((__raw_readl(DC_STAT) & 0x00000020)
-			       != 0x00000020) {
-				msleep(2);
-				timeout -= 2;
-				if (timeout <= 0)
-					break;
-			}
 		return;
 	} else {
 		return;
@@ -829,26 +806,6 @@ void _ipu_dp_dc_disable(ipu_channel_t channel, bool swap)
 		__raw_writel(reg, DC_WR_CH_CONF(dc_chan));
 		spin_unlock_irqrestore(&ipu_lock, lock_flags);
 	} else {
-		timeout = 50;
-
-		/* Wait for DC triple buffer to empty */
-		if (g_dc_di_assignment[dc_chan] == 0)
-			while ((__raw_readl(DC_STAT) & 0x00000002)
-				!= 0x00000002) {
-				msleep(2);
-				timeout -= 2;
-				if (timeout <= 0)
-					break;
-			}
-		else if (g_dc_di_assignment[dc_chan] == 1)
-			while ((__raw_readl(DC_STAT) & 0x00000020)
-				!= 0x00000020) {
-				msleep(2);
-				timeout -= 2;
-				if (timeout <= 0)
-					break;
-			}
-
 		spin_lock_irqsave(&ipu_lock, lock_flags);
 		reg = __raw_readl(DC_WR_CH_CONF(dc_chan));
 		reg &= ~DC_WR_CH_CONF_PROG_TYPE_MASK;
@@ -1086,9 +1043,13 @@ int32_t ipu_init_sync_panel(int disp, uint32_t pixel_clk,
 	dev_dbg(g_ipu_dev, "pixel clk = %d\n", pixel_clk);
 
 	if (sig.ext_clk) {
-		/* Set the  PLL to be an even multiple of the pixel clock. not round div for tvout*/
-		if ((clk_get_usecount(g_pixel_clk[0]) == 0) &&
-				(clk_get_usecount(g_pixel_clk[1]) == 0)) {
+		/*
+		 * Set the  PLL to be an even multiple of the pixel clock.
+		 * Not round div for tvout and ldb.
+		 * Did not consider both DI come from the same ext clk, if
+		 * meet such case, ext clk rate should be set specially.
+		 */
+		if (clk_get_usecount(g_pixel_clk[disp]) == 0) {
 			di_parent = clk_get_parent(g_di_clk[disp]);
 			if (strcmp(di_parent->name, "tve_clk") != 0 &&
 			    strcmp(di_parent->name, "ldb_di0_clk") != 0 &&
@@ -1137,7 +1098,7 @@ int32_t ipu_init_sync_panel(int disp, uint32_t pixel_clk,
 	di_gen = __raw_readl(DI_GENERAL(disp));
 
 	if (sig.interlaced) {
-		if (cpu_is_mx51_rev(CHIP_REV_2_0)) {
+		if (g_ipu_hw_rev >= 2) {
 			/* Setup internal HSYNC waveform */
 			_ipu_di_sync_config(
 					disp, 			/* display */
@@ -1820,6 +1781,39 @@ int32_t ipu_disp_set_window_pos(ipu_channel_t channel, int16_t x_pos,
 	return 0;
 }
 EXPORT_SYMBOL(ipu_disp_set_window_pos);
+
+int32_t ipu_disp_get_window_pos(ipu_channel_t channel, int16_t *x_pos,
+				int16_t *y_pos)
+{
+	u32 reg;
+	unsigned long lock_flags;
+	uint32_t flow = 0;
+
+	if (channel == MEM_FG_SYNC)
+		flow = DP_SYNC;
+	else if (channel == MEM_FG_ASYNC0)
+		flow = DP_ASYNC0;
+	else if (channel == MEM_FG_ASYNC1)
+		flow = DP_ASYNC1;
+	else
+		return -EINVAL;
+
+	if (!g_ipu_clk_enabled)
+		clk_enable(g_ipu_clk);
+	spin_lock_irqsave(&ipu_lock, lock_flags);
+
+	reg = __raw_readl(DP_FG_POS(flow));
+
+	*x_pos = (reg >> 16) & 0x7FF;
+	*y_pos = reg & 0x7FF;
+
+	spin_unlock_irqrestore(&ipu_lock, lock_flags);
+	if (!g_ipu_clk_enabled)
+		clk_disable(g_ipu_clk);
+
+	return 0;
+}
+EXPORT_SYMBOL(ipu_disp_get_window_pos);
 
 void ipu_disp_direct_write(ipu_channel_t channel, u32 value, u32 offset)
 {
