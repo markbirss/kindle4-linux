@@ -106,6 +106,9 @@ struct fsl_usb2_platform_data {
 	unsigned ahb_burst_mode:3;
 	unsigned			suspended : 1;
 	unsigned			already_suspended : 1;
+	unsigned          		is_active : 1;
+	struct mutex    		suspend_lock;
+	int             		irq;
 #ifdef CONFIG_MACH_MX50_YOSHIME
 	unsigned            lowpower:1;
 	unsigned            irq_delay:1;

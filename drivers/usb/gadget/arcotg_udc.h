@@ -554,13 +554,14 @@ struct fsl_udc {
 
 	struct usb_ctrlrequest local_setup_buff;
 	spinlock_t lock;
+	struct mutex suspend_lock;
 	u32 xcvr_type;
 	struct otg_transceiver *transceiver;
 	unsigned softconnect:1;
 	unsigned vbus_active:1;
 	unsigned stopped:1;
 	unsigned remote_wakeup:1;
-	unsigned suspended:1;
+	unsigned lpm:1;
 
 	struct ep_queue_head *ep_qh;	/* Endpoints Queue-Head */
 	struct fsl_req *status_req;	/* ep0 status request */
@@ -584,13 +585,10 @@ struct fsl_udc {
 	u8 device_address;	/* Device USB address */
 
 	struct completion *done;	/* to make sure release() is done */
-	struct delayed_work init_charger_detect_work;
+	struct delayed_work charger_detect_work;
 
 	struct work_struct usbtest_work;	/* USB test mode workqueue handler */
 	struct timer_list timer;		/* Main charger timer fn */
-
-	int lobathi;				/*LOBATH event */
-	int lobatli;				/* LOBATL event */
 
 #ifdef CONFIG_DEBUG_FS
 	struct dentry *debugfs_root;
@@ -603,6 +601,7 @@ struct fsl_udc {
 
 /*-------------------------------------------------------------------------*/
 
+#define DEBUG
 #ifdef DEBUG
 #define DBG(fmt, args...) 	printk(KERN_DEBUG "[%s]  " fmt "\n", \
 				__func__, ## args)

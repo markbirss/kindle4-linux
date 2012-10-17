@@ -1197,11 +1197,13 @@ MRPROPER_FILES += .config .config.old include/asm .version .old_version \
 
 # clean - Delete most, but leave enough to build external modules
 #
+git-clean: 
+	git clean -f -X -e \!.config -e \!.cproject -e \!.settings -e \!.project -e \!include/linux/autoconf.h
 clean: rm-dirs  := $(CLEAN_DIRS)
 clean: rm-files := $(CLEAN_FILES)
 clean-dirs      := $(addprefix _clean_,$(srctree) $(vmlinux-alldirs) Documentation)
 
-PHONY += $(clean-dirs) clean archclean
+PHONY += $(clean-dirs) clean archclean git-clean
 $(clean-dirs):
 	$(Q)$(MAKE) $(clean)=$(patsubst _clean_%,%,$@)
 
